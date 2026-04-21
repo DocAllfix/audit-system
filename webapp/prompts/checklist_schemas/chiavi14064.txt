@@ -1,0 +1,21 @@
+{
+  "iso14064-1_5_1": "Punto 5.1 – Confini organizzativi",
+  "iso14064-1_5_2": "Punto 5.2 – Confini operativi",
+  "iso14064-1_5_2_2": "Punto 5.2.2 – Emissioni e rimozioni dirette di GHG",
+  "iso14064-1_5_2_3": "Punto 5.2.3 – Emissioni indirette di energia",
+  "iso14064-1_5_2_4": "Punto 5.2.4 – Altre emissioni indirette",
+  "iso14064-1_6": "Punto 6 – Quantificazione delle emissioni e rimozioni di GHG",
+  "iso14064-1_6_1": "Punto 6.1 – Identificazione fonti e assorbitori",
+  "iso14064-1_6_2": "Punto 6.2 – Metodologie di quantificazione",
+  "iso14064-1_6_3": "Punto 6.3 – Calcolo emissioni e rimozioni",
+  "iso14064-1_6_4": "Punto 6.4 – Componenti dell’inventario GHG",
+  "iso14064-1_6_4_1": "Punto 6.4.1 – Anno di riferimento",
+  "iso14064-1_6_4_2": "Punto 6.4.2 – Riesame inventario GHG",
+  "iso14064-1_7_1": "Punto 7.1 – Attività di mitigazione",
+  "iso14064-1_8_1_1": "Punto 8.1.1 – Procedure gestione informazioni GHG",
+  "iso14064-1_8_1_2": "Punto 8.1.2 – Controlli, audit e qualità dati",
+  "iso14064-1_8_2": "Punto 8.2 – Conservazione documenti",
+  "iso14064-1_9_1": "Punto 9.1 – Rapporto GHG",
+  "iso14064-1_9_2": "Punto 9.2 – Pianificazione del rapporto GHG",
+  "iso14064-1_9_3_1": "Punto 9.3.1 – Contenuto del rapporto GHG"
+}

@@ -1,0 +1,76 @@
+# =============================================================================
+# AUDIT-OS — .gitignore
+# =============================================================================
+
+# --- Secrets / credenziali reali ---
+.env
+.env.*
+!.env.example
+webapp/.env
+webapp/.env.*
+!webapp/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+webapp/.streamlit/secrets.toml
+
+# --- Dati sensibili / runtime ---
+webapp/config/users.json
+webapp/config/sessions.json
+webapp/data/*.db
+webapp/data/*.db-journal
+webapp/data/*.db-shm
+webapp/data/*.db-wal
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+dist_deploy.zip
+build/
+.vite/
+*.local
+.DS_Store
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.antigravity/
+
+# --- Log / temporanei ---
+*.log
+logs/
+temp/
+tmp/
+*.tmp
+
+# --- OS ---
+Thumbs.db
+desktop.ini
+
+# --- Output test locali (scegli se committare o no) ---
+# testlocalresults/   # decommentare se si vuole escludere
+
+# --- Backup / snapshot ---
+*.bak
+*.backup
+*_backup.*

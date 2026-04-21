@@ -1,0 +1,42 @@
+# ==============================================================================
+# REQUIREMENTS - Audit Automation Framework (DOE)
+# ==============================================================================
+# Ambiente Python per l'esecuzione degli script del layer Execution
+# Generato: 2025-12-29
+# ==============================================================================
+
+# --- MANIPOLAZIONE DOCUMENTI ---
+python-docx>=0.8.11      # Creazione e manipolazione file Word (.docx)
+PyPDF2>=3.0.0            # Estrazione testo da PDF
+openpyxl>=3.1.0          # Lettura/scrittura file Excel (.xlsx)
+
+# --- OCR E IMMAGINI ---
+Pillow>=10.0.0           # Manipolazione immagini
+pdf2image>=1.16.0        # Conversione pagine PDF in immagini
+pytesseract>=0.3.10      # Wrapper per Tesseract OCR
+
+# --- UTILITÀ ---
+tqdm>=4.65.0             # Progress bar per operazioni lunghe
+
+# ==============================================================================
+# NOTE DI INSTALLAZIONE
+# ==============================================================================
+# 1. Creare virtual environment:
+#    python -m venv venv
+#
+# 2. Attivare l'ambiente:
+#    Windows: venv\Scripts\activate
+#    Linux/Mac: source venv/bin/activate
+#
+# 3. Installare dipendenze:
+#    pip install -r requirements.txt
+#
+# 4. DIPENDENZE ESTERNE (non Python):
+#    - Tesseract OCR: https://github.com/tesseract-ocr/tesseract
+#      Su Windows: scaricare installer da UB Mannheim
+#      Su Linux: sudo apt install tesseract-ocr tesseract-ocr-ita
+#
+#    - Poppler (per pdf2image):
+#      Su Windows: scaricare da https://github.com/osber/poppler-windows
+#      Su Linux: sudo apt install poppler-utils
+# ==============================================================================

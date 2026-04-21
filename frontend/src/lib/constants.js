@@ -1,0 +1,32 @@
+export const SUPPORTED_NORMS = [
+  { id: "ISO 9001",         clauseCount: 97,  templateType: "docx", label: "Sistema di Gestione Qualità",             isExcel: false },
+  { id: "ISO 14001",        clauseCount: 39,  templateType: "docx", label: "Sistema di Gestione Ambientale",          isExcel: false },
+  { id: "ISO 45001",        clauseCount: 42,  templateType: "docx", label: "Sistema di Gestione SSL",                 isExcel: false },
+  { id: "ISO 14064",        clauseCount: 20,  templateType: "docx", label: "Inventario Gas Serra",                    isExcel: false },
+  { id: "ESG",              clauseCount: 32,  templateType: "docx", label: "Modello EASI ESG",                        isExcel: false },
+  { id: "PAS 24000",        clauseCount: 36,  templateType: "docx", label: "Benessere Organizzativo",                 isExcel: false },
+  { id: "ISO 27001",        clauseCount: 45,  templateType: "xlsx", label: "Sicurezza delle Informazioni",            isExcel: true  },
+  { id: "ISO 37001",        clauseCount: 28,  templateType: "docx", label: "Sistema Anti-Corruzione",                 isExcel: false },
+  { id: "ISO 39001",        clauseCount: 30,  templateType: "docx", label: "Sicurezza Stradale",                      isExcel: false },
+  { id: "ISO 50001 ESQ",    clauseCount: 35,  templateType: "docx", label: "Sistema di Gestione Energia (ESQ)",       isExcel: false },
+  { id: "ISO 50001 CERTIS", clauseCount: 35,  templateType: "docx", label: "Sistema di Gestione Energia (CERTIS)",    isExcel: false },
+];
+
+export const FILE_TYPE_MAP = {
+  pdf:         { icon: "FileText",      color: "#ef4444", label: "PDF"          },
+  docx:        { icon: "FileText",      color: "#3b82f6", label: "Word"         },
+  doc:         { icon: "FileText",      color: "#3b82f6", label: "Word Legacy"  },
+  xlsx:        { icon: "Table2",        color: "#22c55e", label: "Excel"        },
+  xls:         { icon: "Table2",        color: "#22c55e", label: "Excel Legacy" },
+  image:       { icon: "Image",         color: "#a855f7", label: "Immagine"     },
+  email:       { icon: "Mail",          color: "#f59e0b", label: "Email"        },
+  msg:         { icon: "Mail",          color: "#f59e0b", label: "Email MSG"    },
+  txt:         { icon: "AlignLeft",     color: "#94a3b8", label: "Testo"        },
+  rtf:         { icon: "FileType",      color: "#94a3b8", label: "RTF"          },
+  html:        { icon: "Globe",         color: "#f97316", label: "HTML"         },
+  xml:         { icon: "Code",          color: "#64748b", label: "XML"          },
+  pptx:        { icon: "Presentation",  color: "#ea580c", label: "PowerPoint"   },
+  odt:         { icon: "FileText",      color: "#0ea5e9", label: "ODT"          },
+  zip:         { icon: "Package",       color: "#8b5cf6", label: "ZIP"          },
+  unsupported: { icon: "FileX",         color: "#475569", label: "Non supp."    },
+};

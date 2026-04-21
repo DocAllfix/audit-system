@@ -1,0 +1,44 @@
+{
+  "pas24000_4_1": "Evidenza per il punto 4.1",
+  "pas24000_4_2": "Evidenza per il punto 4.2",
+  "pas24000_4_3": "Evidenza per il punto 4.3",
+  "pas24000_4_4": "Evidenza per il punto 4.4",
+
+  "pas24000_5_1": "Evidenza per il punto 5.1",
+  "pas24000_5_2": "Evidenza per il punto 5.2",
+  "pas24000_5_3": "Evidenza per il punto 5.3",
+  "pas24000_5_4": "Evidenza per il punto 5.4",
+
+  "pas24000_6_1_1": "Evidenza per il punto 6.1.1",
+  "pas24000_6_1_2": "Evidenza per il punto 6.1.2",
+  "pas24000_6_2_1": "Evidenza per il punto 6.2.1",
+  "pas24000_6_2_2": "Evidenza per il punto 6.2.2",
+  "pas24000_6_3": "Evidenza per il punto 6.3",
+
+  "pas24000_7_1": "Evidenza per il punto 7.1",
+  "pas24000_7_2": "Evidenza per il punto 7.2",
+  "pas24000_7_3": "Evidenza per il punto 7.3",
+  "pas24000_7_4_1": "Evidenza per il punto 7.4.1",
+  "pas24000_7_4_2": "Evidenza per il punto 7.4.2",
+  "pas24000_7_4_3": "Evidenza per il punto 7.4.3",
+  "pas24000_7_5_2": "Evidenza per il punto 7.5.2",
+  "pas24000_7_5_3": "Evidenza per il punto 7.5.3",
+
+  "pas24000_8_1_1": "Evidenza per il punto 8.1.1",
+  "pas24000_8_1_2": "Evidenza per il punto 8.1.2",
+  "pas24000_8_1_3": "Evidenza per il punto 8.1.3",
+  "pas24000_8_2": "Evidenza per il punto 8.2",
+  "pas24000_8_5_6": "Evidenza per il punto 8.5.6",
+  "pas24000_8_7": "Evidenza per il punto 8.7",
+
+  "pas24000_9_1_1": "Evidenza per il punto 9.1.1",
+  "pas24000_9_1_2": "Evidenza per il punto 9.1.2",
+  "pas24000_9_2_1": "Evidenza per il punto 9.2.1",
+  "pas24000_9_2_2": "Evidenza per il punto 9.2.2",
+  "pas24000_9_3_1": "Evidenza per il punto 9.3.1",
+  "pas24000_9_3_2": "Evidenza per il punto 9.3.2",
+  "pas24000_9_3_3": "Evidenza per il punto 9.3.3",
+
+  "pas24000_10_1": "Evidenza per il punto 10.1",
+  "pas24000_10_2": "Evidenza per il punto 10.2"
+}

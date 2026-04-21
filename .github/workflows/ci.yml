@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-lint-import:
+    name: Backend — import smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: webapp/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r webapp/requirements.txt
+
+      - name: Import smoke test
+        env:
+          GEMINI_PROXY_URL: "https://dummy.example.com"
+          GEMINI_PROXY_SECRET: "dummy"
+        run: |
+          cd webapp
+          python -c "
+          import api_server
+          from modules import (
+              report_generator, gemini_client,
+              checklist_filler, checklist_producer,
+              auth_manager, db_manager,
+              structured_evidence_generator, structured_evidence_parser
+          )
+          print('[OK] all active modules import')
+          "
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q webapp/
+
+  frontend-build:
+    name: Frontend — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: "https://placeholder.example.com"
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7

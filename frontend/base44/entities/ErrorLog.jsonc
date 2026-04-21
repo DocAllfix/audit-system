@@ -1,0 +1,59 @@
+{
+  "name": "ErrorLog",
+  "type": "object",
+  "properties": {
+    "error_type": {
+      "type": "string",
+      "enum": [
+        "api_error",
+        "ocr_error",
+        "timeout",
+        "parse_error",
+        "file_error",
+        "unknown"
+      ],
+      "description": "Type of error"
+    },
+    "tab": {
+      "type": "string",
+      "enum": [
+        "tab1",
+        "tab2",
+        "tab3"
+      ],
+      "description": "Which tab the error occurred in"
+    },
+    "company_name": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error message"
+    },
+    "stack_trace": {
+      "type": "string"
+    },
+    "batch_index": {
+      "type": "number"
+    },
+    "auto_recovered": {
+      "type": "boolean",
+      "default": false
+    },
+    "resolved": {
+      "type": "boolean",
+      "default": false
+    },
+    "resolved_by": {
+      "type": "string"
+    },
+    "resolved_date": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "error_type",
+    "message"
+  ]
+}

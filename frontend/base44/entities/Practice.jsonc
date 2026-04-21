@@ -1,0 +1,63 @@
+{
+  "name": "Practice",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "report",
+        "checklist_json",
+        "checklist_word"
+      ],
+      "description": "Type of practice"
+    },
+    "company_name": {
+      "type": "string",
+      "description": "Company name"
+    },
+    "norm": {
+      "type": "string",
+      "description": "ISO norm reference"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "processing",
+        "completed",
+        "error"
+      ],
+      "default": "processing"
+    },
+    "processing_time_seconds": {
+      "type": "number",
+      "description": "Processing time in seconds"
+    },
+    "file_url": {
+      "type": "string",
+      "description": "URL to the generated file"
+    },
+    "file_size_bytes": {
+      "type": "number"
+    },
+    "filename": {
+      "type": "string"
+    },
+    "clauses_total": {
+      "type": "number"
+    },
+    "clauses_complete": {
+      "type": "number"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata"
+    }
+  },
+  "required": [
+    "type",
+    "company_name"
+  ]
+}
