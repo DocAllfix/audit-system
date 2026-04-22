@@ -106,7 +106,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "sudo systemctl restart auditos.service && sudo systemctl status auditos.service --no-pager"
+            "sudo systemctl restart auditos.service && systemctl status auditos.service --no-pager"
 
       - name: Cleanup SSH key
         if: always()
