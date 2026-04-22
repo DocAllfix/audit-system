@@ -125,9 +125,14 @@ OUTPUT RICHIESTO - SOLO JSON:
                 if USE_NEW_SDK:
                     # Nuova libreria google-genai
                     full_prompt = prompt if skip_system_prompt else self.system_prompt + "\n\n---\n\n" + prompt
-                    
-                    # Config BLOCK_NONE per evitare censure su documenti rischi (DVR)
+
+                    # Determinismo: temperature=0 + seed fissato per riproducibilita'
+                    # run-to-run (FIX #1 — elimina varianza stocastica che causava
+                    # output divergenti sulla stessa ZIP).
                     safety_config = types.GenerateContentConfig(
+                        temperature=0.0,
+                        top_p=1.0,
+                        seed=42,
                         safety_settings=[
                             types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
                             types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
@@ -135,7 +140,7 @@ OUTPUT RICHIESTO - SOLO JSON:
                             types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
                         ]
                     )
-                    
+
                     response = self.client.models.generate_content(
                         model=self.model_name,
                         contents=full_prompt,
@@ -161,7 +166,13 @@ OUTPUT RICHIESTO - SOLO JSON:
                         "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
                     }
                     old_prompt = prompt if skip_system_prompt else self.system_prompt + "\n\n---\n\n" + prompt
-                    response = self.model.generate_content(old_prompt, safety_settings=safety_settings_old)
+                    # Determinismo: temperature=0 + seed=42 anche su SDK legacy
+                    generation_config_old = {"temperature": 0.0, "top_p": 1.0, "seed": 42}
+                    response = self.model.generate_content(
+                        old_prompt,
+                        safety_settings=safety_settings_old,
+                        generation_config=generation_config_old,
+                    )
                     result = (response.text or "").strip()
                 
                 elapsed = time.time() - start_time
@@ -441,6 +452,38 @@ Output: JSON singolo con numero, sottotitolo, contenuto.
     # analyze_batch() e _call_api() restano INTOCCATI
     # ==========================================================================
 
+    # Cap dinamico per documento (FIX #2): documenti chiave hanno soglie piu'
+    # alte per evitare che dati critici (SOA, albi, certificazioni, rischi)
+    # cadano oltre la truncation. Il detector usa filename + prime 1500 chars.
+    _DOC_CAP_PATTERNS = (
+        # (pattern, cap_chars) — ordinati per priorita'
+        (("visura", "camerale", "cciaa", "rea", "registro imprese"), 30000),
+        (("dvr", "valutazione rischi", "valutazione dei rischi"),     25000),
+        (("statuto", "atto costitutivo", "atto notarile"),            25000),
+        (("bilancio", "esg", "sostenibilita", "gri", "esrs", "csrd"), 25000),
+        (("analisi energetica", "iso 50001", "enpi", "see "),         20000),
+        (("ghg", "inventario emissioni", "iso 14064", "carbon"),      20000),
+        (("iso 9001", "iso 14001", "iso 45001", "iso 27001",
+          "iso 37001", "iso 39001", "soa ", "rating legalita"),       18000),
+    )
+    _DOC_CAP_DEFAULT = 12000  # incrementato da 8000 per tutti gli altri doc
+
+    @classmethod
+    def _doc_char_cap(cls, filename: str, content: str) -> int:
+        """
+        Determina il cap di caratteri per un singolo documento basandosi su
+        filename + prime 1500 chars di content. Ritorna int.
+        Normalizza underscore/trattino in spazio così pattern come "iso 9001"
+        matchano anche con "iso_9001_cert.pdf".
+        """
+        fn = (filename or "").lower().replace("_", " ").replace("-", " ")
+        head = (content or "")[:1500].lower().replace("_", " ").replace("-", " ")
+        for patterns, cap in cls._DOC_CAP_PATTERNS:
+            for pat in patterns:
+                if pat in fn or pat in head:
+                    return cap
+        return cls._DOC_CAP_DEFAULT
+
     def _load_universal_prompt(self, path: str) -> str:
         """
         Legge universal_evidence_prompt.md dal percorso dato.
@@ -488,12 +531,17 @@ Output: JSON singolo con numero, sottotitolo, contenuto.
             print(f"[STRUCTURED] Batch {batch_idx}: universal_prompt vuoto — "
                   "verificare che universal_evidence_prompt.md sia presente e leggibile")
 
-        # Costruzione prompt — spec da PIANO_B sezione B-3
-        docs_text = "\n\n".join(
-            f"### DOCUMENTO {i + 1}: {d.get('filename', 'sconosciuto')}\n"
-            f"{self._sanitize_text(d.get('content', '') or '')[:8000]}"
-            for i, d in enumerate(batch_docs)
-        )
+        # Costruzione prompt — cap dinamico per tipo documento (FIX #2)
+        # Visura, DVR, Statuto, bilanci ESG ottengono cap 20-30k (vs 8k fisso
+        # legacy). Gli altri documenti 12k. Elimina il sintomo "sì/presente"
+        # su documenti ricchi che venivano troncati.
+        _parts = []
+        for i, d in enumerate(batch_docs):
+            fname = d.get('filename', 'sconosciuto')
+            content = self._sanitize_text(d.get('content', '') or '')
+            cap = self._doc_char_cap(fname, content)
+            _parts.append(f"### DOCUMENTO {i + 1}: {fname}\n{content[:cap]}")
+        docs_text = "\n\n".join(_parts)
 
         prompt = (
             f"{universal_prompt}\n\n"
@@ -520,6 +568,24 @@ Output: JSON singolo con numero, sottotitolo, contenuto.
                 return None
 
             print(f"[STRUCTURED] Batch {batch_idx}: ricevuti {len(raw_output)} chars")
+
+            if os.environ.get("DEBUG_DUMP_RAW", "").strip() in ("1", "true", "True"):
+                try:
+                    import datetime as _dt
+                    from pathlib import Path as _Path
+                    _logs_dir = _Path(__file__).resolve().parent.parent / "logs" / "raw"
+                    _logs_dir.mkdir(parents=True, exist_ok=True)
+                    _ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    _docs_names = "_".join(
+                        (d.get('filename', 'x')[:20].replace(' ', '_').replace('/', '_'))
+                        for d in batch_docs[:2]
+                    )
+                    _fn = _logs_dir / f"batch_{batch_idx:02d}_{_ts}_{_docs_names}.yaml"
+                    _fn.write_text(raw_output, encoding="utf-8")
+                    print(f"[DEBUG_DUMP_RAW] salvato: {_fn}")
+                except Exception as _e:
+                    print(f"[DEBUG_DUMP_RAW] dump fallito: {_e}")
+
             return raw_output
 
         except Exception as e:

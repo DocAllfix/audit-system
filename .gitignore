@@ -67,8 +67,10 @@ tmp/
 Thumbs.db
 desktop.ini
 
-# --- Output test locali (scegli se committare o no) ---
-# testlocalresults/   # decommentare se si vuole escludere
+# --- Output test locali (mai committare: contengono dati cliente reali) ---
+testimplementazioni/
+filetestazienda/
+testlocalresults/
 
 # --- Backup / snapshot ---
 *.bak

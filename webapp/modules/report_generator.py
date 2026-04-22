@@ -596,11 +596,10 @@ def _pipeline_strutturata(
 
     # ── B: Smart batching adattivo ─────────────────────────────────────────
     # create_smart_batches() raggruppa per peso reale in caratteri (First Fit
-    # Decreasing): documenti piccoli vengono impacchettati insieme,
-    # documenti grandi ottengono il loro batch dedicato.
-    # max_files=6: fino a 6 doc per batch (chiave a pagamento, quota generosa)
-    # max_chars=40000: allineato al vecchio MAX_BATCH_CHARS della pipeline narrativa
-    batches = create_smart_batches(documents, max_files=6, max_chars=40000)
+    # Decreasing). max_files=4 (FIX #2): coerente con cap dinamico fino a 30k
+    # per doc chiave (Visura/DVR/Statuto). max_chars=50000 per assorbire
+    # batch con 1 doc pesante (es. visura 30k) + 2-3 doc leggeri.
+    batches = create_smart_batches(documents, max_files=4, max_chars=50000)
     num_batches = len(batches)
     total_docs_count = len(documents)
 

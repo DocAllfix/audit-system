@@ -274,35 +274,52 @@ def generate_structured_evidence_docx(
     sub_run.font.size = Pt(13)
 
     # ------------------------------------------------------------------
-    # 3. INTESTAZIONE DATA + STATISTICHE
+    # 3. (Intestazione di sistema rimossa: le statistiche sono ora nel
+    #     blocco STATISTICHE DI ELABORAZIONE sotto per evitare duplicazioni.)
     # ------------------------------------------------------------------
-    doc.add_paragraph()  # spazio
-    info_table = doc.add_table(rows=1, cols=4)
-    info_table.style = "Table Grid"
-    _add_header_row(info_table, [
-        f"Data estrazione: {data_estrazione}",
-        f"Documenti estratti: {docs_estratti}",
-        f"Documenti vuoti: {docs_vuoti}",
-        f"Schede generate: {total_docs}"
-    ], bg_hex="1B4F72")
+    doc.add_paragraph()  # spazio prima del META
+
+    # ------------------------------------------------------------------
+    # 4. SEZIONE META — INTESTAZIONE MANUALE + DATI AZIENDA + STATISTICHE
+    # ------------------------------------------------------------------
+    doc.add_heading("INTESTAZIONE AUDIT — A COMPILAZIONE MANUALE", level=1)
+    p = doc.add_paragraph()
+    note_run = p.add_run(
+        "I campi sotto sono lasciati volutamente vuoti: l'auditor lead li compila "
+        "a mano sul documento prima della consegna."
+    )
+    note_run.italic = True
+    note_run.font.size = Pt(9)
+
+    intestazione_manuale = {
+        "Tipo audit":            "__________________________________",
+        "Auditor lead":          "__________________________________",
+        "Data audit":            "__/__/____",
+        "Commessa / riferimento": "__________________________________",
+        "Note intestazione":     "__________________________________",
+    }
+    _dict_to_table(doc, intestazione_manuale)
     doc.add_paragraph()
-
-    # ------------------------------------------------------------------
-    # 4. SEZIONE META — AUDIT E AZIENDA
-    # ------------------------------------------------------------------
-    doc.add_heading("META — AUDIT E AZIENDA", level=1)
-
-    # Tabella audit
-    if audit_dict:
-        doc.add_paragraph("Dati Audit").runs[0].bold = True
-        _dict_to_table(doc, audit_dict)
-        doc.add_paragraph()
 
     # Tabella azienda
     if azienda_dict:
-        doc.add_paragraph("Dati Azienda").runs[0].bold = True
+        doc.add_heading("DATI AZIENDA", level=1)
         _dict_to_table(doc, azienda_dict)
         doc.add_paragraph()
+
+    # Statistiche deterministiche di elaborazione
+    stats_fields = {
+        "Data estrazione":   str(audit_dict.get("data_estrazione", data_estrazione)),
+        "Documenti estratti": str(audit_dict.get("docs_estratti", docs_estratti)),
+        "Documenti vuoti":    str(audit_dict.get("docs_vuoti", docs_vuoti)),
+        "Schede generate":    str(audit_dict.get("docs_analizzati", total_docs)),
+    }
+    periodo = audit_dict.get("periodo_copertura")
+    if periodo:
+        stats_fields["Periodo copertura"] = str(periodo)
+    doc.add_heading("STATISTICHE DI ELABORAZIONE", level=1)
+    _dict_to_table(doc, stats_fields)
+    doc.add_paragraph()
 
     # Indice documenti
     indice = meta.get("indice", []) or []
@@ -350,17 +367,8 @@ def generate_structured_evidence_docx(
             "Soggetto": doc_entry.get("soggetto", "n.d."),
         }
 
-        # Commessa — campo condizionale: appare solo se il documento
-        # riporta esplicitamente un codice commessa/ordine.
-        # Safety net: sopprimiamo n.d., vuoto e valori palesemente errati
-        # (numeri di batch interni come "Batch N").
-        commessa_val = str(doc_entry.get("commessa", "") or "").strip()
-        _commessa_skip = {
-            "", "n.d.", "n/a", "nd", "none", "null", "—", "-", "non applicabile"
-        }
-        if (commessa_val.lower() not in _commessa_skip
-                and not _re.match(r'^batch\s+\d+$', commessa_val, _re.IGNORECASE)):
-            header_fields["Commessa"] = commessa_val
+        # FIX #4: Commessa eliminata dai campi di header. Se appare in un
+        # documento, il prompt la instrada in un cluster tematico libero.
 
         cat_sec = doc_entry.get("categorie_secondarie", []) or []
         if cat_sec:
@@ -419,7 +427,7 @@ def generate_structured_evidence_docx(
         p.runs[0].bold = True
         p.runs[0].font.size = Pt(10)
 
-        cols = ["N", "Tipo", "Titolo", "Riferimento", "Data Doc", "Commessa"]
+        cols = ["N", "Tipo", "Titolo", "Riferimento", "Data Doc", "Emesso da"]
         tbl = doc_obj.add_table(rows=1 + len(group), cols=len(cols))
         tbl.style = "Table Grid"
         _add_header_row(tbl, cols)
@@ -430,7 +438,7 @@ def generate_structured_evidence_docx(
             row.cells[2].text = str(entry.get("titolo", ""))[:80]
             row.cells[3].text = _value_to_str(entry.get("riferimento"))
             row.cells[4].text = _value_to_str(entry.get("data_doc"))
-            row.cells[5].text = _value_to_str(entry.get("commessa"))
+            row.cells[5].text = _value_to_str(entry.get("emesso_da"))
             for cell in row.cells:
                 for para in cell.paragraphs:
                     for run in para.runs:
@@ -511,21 +519,15 @@ if __name__ == "__main__":
         # Test con fixture minima
         fixture = {
             "meta": {
-                "audit": {
-                    "data_estrazione": "18/04/2026",
-                    "norma_principale": "ISO 9001:2015",
-                    "tipo_audit": "Sorveglianza A1",
-                    "docs_estratti": 1,
-                    "docs_analizzati": 1,
-                },
+                "audit": {},  # blocco compilato deterministicamente da _compute_deterministic_meta
                 "azienda": {
                     "nome": "TEST S.R.L.",
-                    "cf": "12345678901",
+                    "piva": "12345678901",
                     "sede": "Via Roma 1 — 20100 Milano (MI)",
                 },
                 "indice": [
                     {"n": 1, "tipo": "VIS", "titolo": "Visura Camerale",
-                     "categoria": "08 · LEGALE/SOCIETARIA", "norme": ["ISO 9001:2015"]}
+                     "categoria": "08 · LEGALE/SOCIETARIA"}
                 ],
                 "abbrev_aggiunte": []
             },
@@ -535,11 +537,10 @@ if __name__ == "__main__":
                     "nome": "LEGALE/SOCIETARIA",
                     "documenti": [
                         {
-                            "tipo": "VIS",
+                            "tipo": "Visura Camerale",
                             "categoria": "08 · LEGALE/SOCIETARIA",
                             "titolo": "Visura Camerale TEST S.R.L.",
                             "riferimento": "n.d.",
-                            "commessa": "n.d.",
                             "data_doc": "15/01/2026",
                             "data_scadenza": "non applicabile",
                             "emesso_da": "CCIAA Milano",
@@ -548,7 +549,7 @@ if __name__ == "__main__":
                             "cluster": {
                                 "Identificativi": {
                                     "ragione_sociale": "TEST S.R.L.",
-                                    "codice_fiscale": "12345678901",
+                                    "piva": "12345678901",
                                     "forma_giuridica": "S.r.l.",
                                 }
                             },
@@ -557,7 +558,7 @@ if __name__ == "__main__":
                                 "ricevente": "n.d.",
                                 "data_firma": "n.d."
                             },
-                            "note_audit": "CF non leggibile sul documento — Rif. ISO 9001 cl. 7.5.2"
+                            "note_audit": "Rif. ISO 9001 cl. 7.5.2"
                         }
                     ]
                 }

@@ -20,9 +20,118 @@ except ImportError:
 # Campi fissi dell'intestazione scheda documento (dal PROMPT UNIVERSALE)
 _HEADER_DOC_KEYS = frozenset({
     'tipo', 'categoria', 'categorie_secondarie', 'titolo',
-    'riferimento', 'commessa', 'data_doc', 'data_scadenza',
+    'riferimento', 'data_doc', 'data_scadenza',
     'emesso_da', 'soggetto', 'norme_pertinenti', 'firme', 'note_audit'
 })
+
+# Campi da eliminare silenziosamente se il modello li produce (legacy o privacy)
+_STRIP_KEYS = frozenset({
+    'commessa',                        # eliminato dal sistema (FIX #4)
+    'cf', 'codice_fiscale',            # consentito SOLO P.IVA azienda, mai CF persona fisica
+    'data_nascita', 'luogo_nascita',   # privacy
+    'residenza_privata', 'indirizzo_residenza',
+    'numero_documento', 'documento_identita',
+})
+
+# Pattern privacy per stripping su valori foglia (post-parsing)
+_CF_PATTERN = re.compile(r'\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b')
+_NATO_PATTERN = re.compile(
+    r'\bnat[oa]\s+(?:il|a)\s+[^\n;,]{1,60}',
+    re.IGNORECASE
+)
+_DATA_NASCITA_PATTERN = re.compile(
+    r'\b(?:data\s+di\s+nascita|nato\s+il)\s*[:\-]?\s*\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b',
+    re.IGNORECASE
+)
+
+_PRIVACY_REDACTED = "[dato privacy rimosso]"
+
+
+def _redact_privacy_value(value):
+    """Applica stripper privacy a una foglia (str). Altri tipi tornano intatti."""
+    if not isinstance(value, str):
+        return value
+    out = value
+    out = _CF_PATTERN.sub(_PRIVACY_REDACTED, out)
+    out = _DATA_NASCITA_PATTERN.sub(_PRIVACY_REDACTED, out)
+    out = _NATO_PATTERN.sub(_PRIVACY_REDACTED, out)
+    return out
+
+
+# Termini che indicano estrazione superficiale ("sì / presente" al posto dei dati)
+_SHALLOW_VALUES = frozenset({
+    "si", "sì", "presente", "conforme", "rilasciato", "ok", "yes", "true"
+})
+
+# Chiavi tipicamente associate a liste strutturate critiche in Visura / DVR
+_EXPECTED_LIST_KEYS = frozenset({
+    "soa", "attestazioni_soa", "certificazioni", "certificazioni_iso",
+    "albi", "iscrizioni_albi", "albo_gestori", "rating_legalita",
+    "cariche_sociali", "soci", "partecipazioni",
+    "dpi", "dpi_assegnati", "fattori_rischio", "formazione",
+    "scope_1", "scope_2", "scope_3", "see", "enpi",
+    "temi_materiali", "kpi_ambientali", "kpi_sociali",
+})
+
+
+def _soft_audit_warnings(result: Dict) -> List[str]:
+    """
+    FASE C: log soft di warnings non bloccanti.
+    Cerca su schede Visura/DVR/ESG campi che contengono valori superficiali
+    come 'sì'/'presente' invece di liste atomiche.
+    Zero side effects sull'output. Serve a monitorare la qualita'.
+    """
+    warnings: List[str] = []
+    try:
+        for sezione in result.get("sezioni", []):
+            for doc in sezione.get("documenti", []):
+                tipo = str(doc.get("tipo", "")).lower()
+                titolo = str(doc.get("titolo", ""))
+                is_critical = any(key in tipo for key in (
+                    "visura", "camerale", "dvr", "valutazione rischi",
+                    "bilancio", "esg", "sostenibilita",
+                    "analisi energetica", "iso 50001", "iso 14064"
+                ))
+                if not is_critical:
+                    continue
+                cluster = doc.get("cluster", {}) or {}
+                for cname, cdata in cluster.items():
+                    if not isinstance(cdata, dict):
+                        continue
+                    for k, v in cdata.items():
+                        klow = str(k).lower()
+                        vlow = str(v).strip().lower() if not isinstance(v, (list, dict)) else ""
+                        if klow in _EXPECTED_LIST_KEYS and vlow in _SHALLOW_VALUES:
+                            warnings.append(
+                                f"[QUALITY WARN] {tipo or 'doc'} '{titolo}' — "
+                                f"cluster '{cname}' campo '{k}' ha valore '{v}'. "
+                                f"Atteso: lista atomica."
+                            )
+        for w in warnings:
+            print(w)
+    except Exception as e:
+        print(f"[QUALITY WARN] soft audit fallito: {e}")
+    return warnings
+
+
+def _scrub_tree(node):
+    """Applica _STRIP_KEYS e _redact_privacy_value ricorsivamente su dict/list."""
+    if isinstance(node, dict):
+        keys_to_drop = [k for k in node.keys()
+                        if isinstance(k, str) and k.lower() in _STRIP_KEYS]
+        for k in keys_to_drop:
+            del node[k]
+        for k, v in list(node.items()):
+            if isinstance(v, (dict, list)):
+                _scrub_tree(v)
+            else:
+                node[k] = _redact_privacy_value(v)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            if isinstance(v, (dict, list)):
+                _scrub_tree(v)
+            else:
+                node[i] = _redact_privacy_value(v)
 
 
 # ==============================================================================
@@ -59,10 +168,47 @@ def _extract_yaml_blocks(text: str) -> List[Tuple[int, str]]:
     """
     Estrae tutti i blocchi ```yaml...``` (o ```json, o senza tag) dal testo.
     Ritorna lista di (posizione_inizio, contenuto_raw).
+
+    Se i fence esistono, estrae anche le porzioni di testo TRA fence che
+    contengono dati utili (es. `# ── DOC N ──` o `^tipo:` top-level).
+    Questo evita che batch non-fenced tra batch fenced vengano persi.
     """
-    # Accetta yaml, YAML, json, JSON, o nessun tag — il parser tenta comunque
-    pattern = re.compile(r'```(?:yaml|YAML|json|JSON)?\s*\n(.*?)```', re.DOTALL)
-    return [(m.start(), m.group(1)) for m in pattern.finditer(text)]
+    # Accetta yaml, YAML, json, JSON, o nessun tag — il parser tenta comunque.
+    # Supporta anche fence non chiusi (truncation): match fino a fine testo.
+    pattern = re.compile(
+        r'```(?:yaml|YAML|json|JSON)?\s*\n(.*?)(?:```|\Z)',
+        re.DOTALL
+    )
+    matches = list(pattern.finditer(text))
+    blocks: List[Tuple[int, str]] = [(m.start(), m.group(1)) for m in matches]
+
+    if not blocks:
+        return blocks
+
+    # Recupera porzioni tra/attorno fence che contengono schede non fence-wrappate.
+    # Separatori DOC o righe `^tipo:` top-level → sono schede reali.
+    useful_signal = re.compile(
+        r'(^[ \t]*#[ \t]*[─\-═–—*_=.·•]*[ \t]*(?:DOC|SCHEDA|DOCUMENTO)[ \t]+\d+'
+        r'|^tipo[ \t]*:[ \t]*["\']?\S)',
+        re.MULTILINE | re.IGNORECASE
+    )
+
+    gaps: List[Tuple[int, int]] = []
+    prev_end = 0
+    for m in matches:
+        if m.start() > prev_end:
+            gaps.append((prev_end, m.start()))
+        prev_end = m.end()
+    if prev_end < len(text):
+        gaps.append((prev_end, len(text)))
+
+    for gstart, gend in gaps:
+        segment = text[gstart:gend]
+        if useful_signal.search(segment):
+            blocks.append((gstart, segment))
+
+    blocks.sort(key=lambda t: t[0])
+    return blocks
 
 
 def _extract_section_headers(text: str) -> List[Tuple[int, str, str]]:
@@ -224,11 +370,105 @@ def _extract_markdown_tables(text: str) -> Tuple[str, Dict[str, List[List[str]]]
     return clean, tables
 
 
+# Pattern YAML malformato ricorrente prodotto dall'LLM:
+#   fattore_durata_tM_tabella: lista_vuota: true
+# (nested inline mapping non valido). Lo convertiamo in forma multilinea:
+#   fattore_durata_tM_tabella:
+#     lista_vuota: true
+# Vincoli: entrambe le key devono essere bare word (no quote, no spazi),
+# il primo ':' deve essere seguito da >=1 spazio. Cosi' non tocchiamo
+# stringhe quotate come titolo: "Autorizzazione: progetto".
+_NESTED_INLINE_RE = re.compile(
+    r'^(?P<indent>[ \t]*)(?P<k1>[A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]+'
+    r'(?P<k2>[A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(?P<val>.+?)[ \t]*$',
+    re.MULTILINE
+)
+
+def _sanitize_nested_inline_mapping(text: str) -> str:
+    """Converte 'key1: key2: value' in multilinea valida.
+    Applica solo a righe intere (bare word), non tocca valori quotati."""
+    def repl(m):
+        ind = m.group('indent')
+        return f"{ind}{m.group('k1')}:\n{ind}  {m.group('k2')}: {m.group('val')}"
+    return _NESTED_INLINE_RE.sub(repl, text)
+
+
+_ERR_LINE_RE = re.compile(r'line[ \t]+(\d+),[ \t]+column[ \t]+\d+')
+
+def _parse_yaml_with_line_skip(text: str, max_skip: int = 5) -> Optional[Any]:
+    """Tenta il parse YAML; se fallisce, individua la riga con errore e la
+    rimuove, poi ritenta (fino a max_skip righe). Ritorna None se anche
+    cosi' non si ottiene un dict utile. Silenzioso (ritorna None su ogni
+    eccezione). Usato come recovery per output LLM parzialmente invalidi."""
+    if not HAS_YAML or not text or not text.strip():
+        return None
+
+    class _AuditLoader(yaml.SafeLoader):
+        pass
+    _AuditLoader.yaml_implicit_resolvers = {
+        k: [(tag, regexp) for tag, regexp in resolvers
+            if tag != 'tag:yaml.org,2002:bool']
+        for k, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+
+    current = text
+    bad_lines: List[int] = []
+    for _ in range(max_skip + 1):
+        try:
+            return yaml.load(current, Loader=_AuditLoader)
+        except yaml.YAMLError as e:
+            msg = str(e)
+            # Estrai TUTTE le posizioni di errore e prendi la PIU' AVANZATA
+            # (quella che ferma veramente il parser — la prima segnala solo
+            #  il contesto, "while parsing a block mapping").
+            positions = _ERR_LINE_RE.findall(msg)
+            if not positions:
+                return None
+            ln = max(int(p) for p in positions)
+            lines = current.split('\n')
+            if ln < 1 or ln > len(lines):
+                return None
+            bad_lines.append(ln)
+            lines.pop(ln - 1)
+            current = '\n'.join(lines)
+        except Exception:
+            return None
+    return None
+
+
+# Fallback regex per estrarre campi minimi da chunk che il parser YAML rifiuta.
+# Se il documento e' irrecuperabile, almeno preserviamo intestazione e categoria
+# per non perdere la scheda nel report finale.
+_FIELD_EXTRACT_RE = {
+    'tipo': re.compile(r'^tipo[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+    'categoria': re.compile(r'^categoria[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+    'titolo': re.compile(r'^titolo[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+    'riferimento': re.compile(r'^riferimento[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+    'data_doc': re.compile(r'^data_doc[ \t]*:[ \t]*([^\n#]+?)[ \t]*$', re.MULTILINE),
+    'emesso_da': re.compile(r'^emesso_da[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+    'soggetto': re.compile(r'^soggetto[ \t]*:[ \t]*"([^"\n]+)"', re.MULTILINE),
+}
+
+def _regex_fallback_extract(chunk: str) -> Optional[Dict]:
+    """Estrae campi intestazione con regex quando YAML fallisce. Segna la
+    scheda con note_audit che indica recovery parziale."""
+    result: Dict[str, Any] = {}
+    for key, rx in _FIELD_EXTRACT_RE.items():
+        m = rx.search(chunk)
+        if m:
+            result[key] = m.group(1).strip()
+    if 'tipo' not in result and 'categoria' not in result:
+        return None
+    return result
+
+
 def _yaml_chunk_to_doc(chunk: str, tables: Dict) -> Optional[Dict]:
     """
     Parsa un singolo chunk YAML (un documento) in dict.
     Ricostruisce le tabelle Markdown come cluster.
     Gestisce campi con commenti inline (tipo: CNC # commento).
+    Recovery in 3 livelli: normal parse → sanitizza nested → retry con line-skip
+    → fallback regex su campi header.
     """
     # Rimuovi righe che sono solo commenti di sezione (# ── DOC N ──, # SEZIONE N)
     lines = []
@@ -243,9 +483,26 @@ def _yaml_chunk_to_doc(chunk: str, tables: Dict) -> Optional[Dict]:
     # Rimuovi commenti inline dal YAML (# testo dopo valore)
     clean_chunk = re.sub(r'(\S)\s+#[^"\']*$', r'\1', clean_chunk, flags=re.MULTILINE)
 
+    # LIVELLO 1: parse diretto
     parsed = _safe_yaml_load(clean_chunk)
+
+    # LIVELLO 2: sanitizza nested inline mapping + retry
     if not isinstance(parsed, dict):
-        return None
+        sanitized = _sanitize_nested_inline_mapping(clean_chunk)
+        if sanitized != clean_chunk:
+            parsed = _safe_yaml_load(sanitized)
+        # LIVELLO 3: line-skip recovery (fino a 5 righe malformate)
+        if not isinstance(parsed, dict):
+            parsed = _parse_yaml_with_line_skip(sanitized if sanitized != clean_chunk else clean_chunk)
+
+    # LIVELLO 4: fallback regex header-only
+    if not isinstance(parsed, dict):
+        fallback = _regex_fallback_extract(clean_chunk)
+        if fallback is None:
+            return None
+        parsed = fallback
+        parsed['note_audit'] = ("[RECOVERY] Scheda ricostruita da header-only; "
+                                "corpo YAML malformato dal modello.")
 
     # Campi obbligatori minimi
     if "tipo" not in parsed and "categoria" not in parsed:
@@ -274,9 +531,9 @@ def _yaml_chunk_to_doc(chunk: str, tables: Dict) -> Optional[Dict]:
             cluster[k] = v
 
     doc['cluster'] = cluster
-    # Garantisce presenza campi minimi
+    # Garantisce presenza campi minimi (commessa rimossa — FIX #4)
     for field in ('tipo', 'categoria', 'categorie_secondarie', 'titolo',
-                  'riferimento', 'commessa', 'data_doc', 'data_scadenza',
+                  'riferimento', 'data_doc', 'data_scadenza',
                   'emesso_da', 'soggetto', 'norme_pertinenti', 'firme', 'note_audit'):
         if field not in doc:
             doc[field] = [] if field in ('categorie_secondarie', 'norme_pertinenti') else ({} if field == 'firme' else "")
@@ -300,25 +557,48 @@ def _split_into_meta_and_docs(yaml_content: str) -> Tuple[str, List[str]]:
       tipo: PRO
       ...
     """
-    # Pattern separator: linee come "# ── DOC 1 ──────" o "# --- DOC 1 ---"
+    # Pattern separator primario: linee come "# ── DOC 1 ──", "# --- DOC 1 ---",
+    # "# — DOC 1 —" (em-dash), "# – DOC 1 –" (en-dash), "# *** DOC 1 ***", ecc.
+    # Accetta ampio set di decorazioni; sinonimi DOC/SCHEDA/DOCUMENTO.
     doc_sep = re.compile(
-        r'^[ \t]*#[ \t]*[─\-─═\-]+[ \t]*DOC[ \t]+\d+',
+        r'^[ \t]*#[ \t]*[─\-═–—*_=.·•]*[ \t]*(?:DOC|SCHEDA|DOCUMENTO)[ \t]+\d+',
         re.MULTILINE | re.IGNORECASE
     )
 
     positions = [(m.start(), m.end()) for m in doc_sep.finditer(yaml_content)]
 
-    if not positions:
-        # Nessun separatore — tutto è META (o formato diverso)
-        return yaml_content, []
+    if positions:
+        meta_text = yaml_content[:positions[0][0]]
+        doc_texts = []
+        for i, (start, _) in enumerate(positions):
+            end = positions[i + 1][0] if i + 1 < len(positions) else len(yaml_content)
+            doc_texts.append(yaml_content[start:end])
+        return meta_text, doc_texts
 
-    meta_text = yaml_content[:positions[0][0]]
-    doc_texts = []
-    for i, (start, _) in enumerate(positions):
-        end = positions[i + 1][0] if i + 1 < len(positions) else len(yaml_content)
-        doc_texts.append(yaml_content[start:end])
+    # FALLBACK: il modello non ha usato il separatore richiesto.
+    # Splittiamo sulle righe `^tipo:` di top-level (indentazione 0), che
+    # segnano sempre l'inizio di una nuova scheda documento secondo lo schema.
+    tipo_line = re.compile(r'^tipo[ \t]*:[ \t]*["\']?\S', re.MULTILINE)
+    tipo_positions = [m.start() for m in tipo_line.finditer(yaml_content)]
 
-    return meta_text, doc_texts
+    # Se c'e' solo un `tipo:` e si trova nella prima meta' → probabilmente
+    # e' dentro il blocco META (campi aziendali o indice), non una scheda.
+    # Serve almeno 1 `tipo:` oltre al primo quarto del testo per considerarlo
+    # una scheda dedicata. Se 2+ `tipo:` → splitta comunque.
+    if len(tipo_positions) >= 2:
+        meta_text = yaml_content[:tipo_positions[0]]
+        doc_texts = []
+        for i, start in enumerate(tipo_positions):
+            end = tipo_positions[i + 1] if i + 1 < len(tipo_positions) else len(yaml_content)
+            doc_texts.append(yaml_content[start:end])
+        return meta_text, doc_texts
+
+    if len(tipo_positions) == 1 and tipo_positions[0] > len(yaml_content) // 4:
+        # Un solo doc nel batch, inizia dopo il META
+        return yaml_content[:tipo_positions[0]], [yaml_content[tipo_positions[0]:]]
+
+    # Nessun separatore e nessun `tipo:` top-level → tutto META (o formato diverso)
+    return yaml_content, []
 
 
 def parse_structured_response(raw_text: str) -> Optional[Dict]:
@@ -352,34 +632,39 @@ def parse_structured_response(raw_text: str) -> Optional[Dict]:
 
         meta: Dict = {"audit": {}, "azienda": {}, "indice": [], "abbrev_aggiunte": []}
         sezioni_dict: Dict[str, Dict] = {}
+        # Candidate per il nome azienda, con score di priorita' della fonte
+        # (più alto = più affidabile). Tiene traccia di tutti i batch che
+        # hanno emesso un `azienda.nome`, poi sceglie il migliore.
+        azienda_candidates: List[Tuple[int, Dict]] = []
 
-        for _pos, block_content in yaml_blocks:
+        for block_idx, (_pos, block_content) in enumerate(yaml_blocks):
             # Estrai tabelle Markdown PRIMA del parsing YAML
             clean_content, md_tables = _extract_markdown_tables(block_content)
 
             # Dividi in META + doc chunks
             meta_text, doc_texts = _split_into_meta_and_docs(clean_content)
+            docs_in_block = 0  # per logging diagnostico
 
             # --- Parsa META ---
-            # Rimuovi commenti standalone prima del parsing
             meta_clean = re.sub(r'^[ \t]*#.*$', '', meta_text, flags=re.MULTILINE)
             meta_clean = re.sub(r'(\S)\s+#[^"\']*$', r'\1', meta_clean, flags=re.MULTILINE)
             parsed_meta = _safe_yaml_load(meta_clean)
+            block_meta: Dict = {}
             if isinstance(parsed_meta, dict):
                 block_meta = _parse_meta_block(meta_clean)
-                # Merge: i dati del primo batch che ha azienda vincono
-                if block_meta.get("azienda", {}).get("nome") and not meta.get("azienda", {}).get("nome"):
-                    meta["azienda"] = block_meta["azienda"]
                 if block_meta.get("audit") and not meta.get("audit", {}).get("norma_principale"):
                     meta["audit"] = block_meta["audit"]
                 meta["indice"] = meta.get("indice", []) + block_meta.get("indice", [])
                 meta["abbrev_aggiunte"] = meta.get("abbrev_aggiunte", []) + block_meta.get("abbrev_aggiunte", [])
 
             # --- Parsa documenti ---
+            block_tipi: List[str] = []  # tipi documento presenti in questo batch
             for doc_chunk in doc_texts:
                 doc = _yaml_chunk_to_doc(doc_chunk, md_tables)
                 if not doc:
                     continue
+                docs_in_block += 1
+                block_tipi.append(str(doc.get("tipo", "")).lower())
 
                 # Determina sezione dalla categoria del documento
                 cat = str(doc.get("categoria", "") or "")
@@ -391,6 +676,39 @@ def parse_structured_response(raw_text: str) -> Optional[Dict]:
                     sezioni_dict[sid] = {"id": sid, "nome": sname, "documenti": []}
                 sezioni_dict[sid]["documenti"].append(doc)
 
+            # Log diagnostico per-batch (aiuta a trovare batch che perdono DOC)
+            # ASCII-only per compatibilita' Windows cp1252 stdout.
+            print(f"[PARSER] Batch #{block_idx}: {len(block_content)} chars -> "
+                  f"{len(doc_texts)} chunks -> {docs_in_block} schede valide")
+
+            # Score azienda_nome: priorita' al batch che contiene fonti affidabili
+            az_nome = (block_meta.get("azienda", {}) or {}).get("nome", "") if block_meta else ""
+            if az_nome and str(az_nome).strip():
+                # Score alto = fonte attendibile (visura, statuto, attestazione SOA, fattura)
+                # Score basso = fonte dubbia (solo DVR/CV/formazione nel batch)
+                tipi_joined = " ".join(block_tipi)
+                score = 0
+                if re.search(r'visura|camerale|cciaa|registro imprese', tipi_joined):
+                    score += 100
+                if re.search(r'statuto|atto costitutivo|atto notarile', tipi_joined):
+                    score += 80
+                if re.search(r'attestazione soa|certificato iso|rating legalit', tipi_joined):
+                    score += 60
+                if re.search(r'fattura|bilancio', tipi_joined):
+                    score += 30
+                if re.search(r'\bdvr\b|curriculum|cv |attestato.{0,30}formazione|registro.{0,5}presenze', tipi_joined):
+                    score -= 50  # penalita': il nome e' probabilmente consulente/formatore
+                azienda_candidates.append((score, block_meta.get("azienda", {}) or {}))
+                print(f"[PARSER] Batch #{block_idx}: candidato azienda='{az_nome}' score={score} "
+                      f"(tipi={block_tipi[:3]})")
+
+        # Scegli la migliore candidata azienda: score più alto vince
+        if azienda_candidates:
+            azienda_candidates.sort(key=lambda t: t[0], reverse=True)
+            best_score, best_azienda = azienda_candidates[0]
+            meta["azienda"] = best_azienda
+            print(f"[PARSER] Nome azienda scelto: '{best_azienda.get('nome', '')}' (score={best_score})")
+
         sezioni = [sezioni_dict[k] for k in sorted(sezioni_dict.keys())]
 
         if not meta.get("azienda") and not sezioni:
@@ -399,7 +717,13 @@ def parse_structured_response(raw_text: str) -> Optional[Dict]:
 
         n_docs = sum(len(s["documenti"]) for s in sezioni)
         print(f"[PARSER] OK: {len(sezioni)} sezioni, {n_docs} documenti")
-        return {"meta": meta, "sezioni": sezioni}
+
+        result = {"meta": meta, "sezioni": sezioni}
+        # FIX #4 + #6: scrub privacy & campi legacy (commessa, cf, data_nascita…)
+        _scrub_tree(result)
+        # FASE C: soft quality warnings (non bloccante) su documenti critici
+        _soft_audit_warnings(result)
+        return result
 
     except Exception as e:
         print(f"[PARSER] Errore inatteso: {e}")
@@ -458,7 +782,6 @@ def _parse_json_narrativo_fallback(raw_text: str) -> Optional[Dict]:
                 "categorie_secondarie": [],
                 "titolo": titolo,
                 "riferimento": "",
-                "commessa": "",
                 "data_doc": "",
                 "data_scadenza": "",
                 "emesso_da": ente,
@@ -531,33 +854,24 @@ if __name__ == "__main__":
     print("✅ parse_structured_response (input invalidi): OK")
 
     if HAS_YAML:
+        # Formato reale prodotto dal PROMPT UNIVERSALE: un singolo blocco yaml
+        # con meta in testa e documenti separati da `# ── DOC N ──`.
         fixture = """
 ```yaml
-audit:
-  data_estrazione: 18/04/2026
-  norma_principale: "ISO 9001:2015"
-  tipo_audit: "Sorveglianza A1"
-  docs_estratti: 1
-  docs_analizzati: 1
-
 azienda:
   nome: "TEST S.R.L."
-  cf: "12345678901"
+  piva: "12345678901"
   sede: "Via Roma 1 — 20100 Milano (MI)"
 
 abbrev_aggiunte: []
 indice:
-  - {n: 1, tipo: "VIS", titolo: "Visura Camerale", categoria: "08 · LEGALE/SOCIETARIA", norme: ["ISO 9001:2015"]}
-```
+  - {n: 1, tipo: "VIS", titolo: "Visura Camerale", categoria: "08 · LEGALE/SOCIETARIA"}
 
-## SEZIONE 08 · LEGALE/SOCIETARIA
-
-```yaml
-tipo: VIS
+# ── DOC 1 ──────────────────────────────────────────────────
+tipo: "Visura Camerale"
 categoria: "08 · LEGALE/SOCIETARIA"
 titolo: "Visura Camerale TEST S.R.L."
 riferimento: "n.d."
-commessa: "n.d."
 data_doc: 15/01/2026
 data_scadenza: "non applicabile"
 emesso_da: "CCIAA Milano"
@@ -565,7 +879,7 @@ soggetto: "TEST S.R.L."
 norme_pertinenti: ["ISO 9001:2015"]
 
 ragione_sociale: "TEST S.R.L."
-codice_fiscale: "12345678901"
+piva: "12345678901"
 forma_giuridica: "S.r.l."
 
 firme:
@@ -581,12 +895,74 @@ note_audit: ""
         assert "meta" in result
         assert "sezioni" in result
         assert extract_company_name_from_meta(result) == "TEST S.R.L."
-        assert len(result["sezioni"]) == 1
+        assert len(result["sezioni"]) == 1, f"Sezioni attese=1, trovate={len(result['sezioni'])}"
         assert result["sezioni"][0]["id"] == "08"
+        # FIX #4: commessa eliminata dal doc
+        doc0 = result["sezioni"][0]["documenti"][0]
+        assert "commessa" not in doc0, "commessa deve essere rimossa dal doc"
         print("✅ parse_structured_response (fixture YAML): OK")
         print(f"   Sezioni trovate: {len(result['sezioni'])}")
         print(f"   Documenti: {sum(len(s['documenti']) for s in result['sezioni'])}")
         print(f"   Azienda: {extract_company_name_from_meta(result)}")
+
+        # Test privacy stripping: CF persona fisica deve sparire
+        priv_fixture = """
+```yaml
+azienda:
+  nome: "ACME"
+  piva: "12345678901"
+
+# ── DOC 1 ──
+tipo: "Busta Paga"
+categoria: "09 · RISORSE UMANE E LAVORO"
+titolo: "Busta paga gennaio"
+lavoratore: "Mario Rossi"
+cf_lavoratore: "RSSMRA80A01H501Z"
+nota: "Nato il 01/01/1980 a Roma"
+```
+"""
+        priv_res = parse_structured_response(priv_fixture)
+        assert priv_res is not None
+        dumped = json.dumps(priv_res, ensure_ascii=False)
+        assert "RSSMRA80A01H501Z" not in dumped, "CF persona fisica NON strippato"
+        assert "nato il 01/01/1980" not in dumped.lower(), "Data nascita NON strippata"
+        assert "01/01/1980" not in dumped, "Data nascita raw NON strippata"
+        print("✅ Privacy stripper (CF + data nascita): OK")
+
+        # FASE C: soft warning su Visura superficiale
+        shallow_fixture = """
+```yaml
+azienda:
+  nome: "ACME"
+  piva: "12345678901"
+
+# ── DOC 1 ──
+tipo: "Visura Camerale"
+categoria: "08 · LEGALE/SOCIETARIA"
+titolo: "Visura Camerale ACME"
+
+certificazioni:
+  soa: "presente"
+  albi: "si"
+  rating_legalita: "ok"
+```
+"""
+        warnings_captured: List[str] = []
+        import builtins as _b
+        real_print = _b.print
+        def _capture(*args, **kw):
+            msg = " ".join(str(a) for a in args)
+            if "[QUALITY WARN]" in msg:
+                warnings_captured.append(msg)
+            real_print(*args, **kw)
+        _b.print = _capture
+        try:
+            parse_structured_response(shallow_fixture)
+        finally:
+            _b.print = real_print
+        assert any("soa" in w.lower() for w in warnings_captured), \
+            f"Atteso warn su 'soa' superficiale, trovati: {warnings_captured}"
+        print(f"✅ Soft quality warnings: {len(warnings_captured)} emessi su Visura superficiale")
     else:
         print("⚠️  Test fixture saltato — PyYAML non installato")
 

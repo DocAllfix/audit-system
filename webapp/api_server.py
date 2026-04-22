@@ -93,25 +93,9 @@ logging.basicConfig(
 logger = logging.getLogger("audit-os-api")
 
 # ── GEMINI API KEY ─────────────────────────────────────────────────────────────
-def _load_api_key() -> str:
-    """Legge GEMINI_API_KEY: variabile ambiente → secrets.toml."""
-    key = os.environ.get("GEMINI_API_KEY", "")
-    if key:
-        return key
-    secrets_path = os.path.join(WEBAPP_DIR, ".streamlit", "secrets.toml")
-    if os.path.exists(secrets_path):
-        try:
-            with open(secrets_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    stripped = line.strip()
-                    if stripped.startswith("GEMINI_API_KEY"):
-                        _, _, val = stripped.partition("=")
-                        return val.strip().strip('"').strip("'")
-        except Exception:
-            pass
-    return ""
-
-GEMINI_API_KEY = _load_api_key()
+# load_dotenv() sopra carica webapp/.env in os.environ.
+# In produzione (systemd) la var e' gia' impostata e override=False la rispetta.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # ── Helper: estrazione testo da DOCX o PDF ────────────────────────────────────
 def _extract_report_text(file_bytes: bytes, filename: str):
