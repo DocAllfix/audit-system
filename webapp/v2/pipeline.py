@@ -1,31 +1,436 @@
 """
-Pipeline V2 — Orchestrator stub (Fase 0).
+V2 — Pipeline Orchestrator (Fase 8).
 
-Sarà sostituito in Fase 8 con l'orchestrazione end-to-end completa:
-ingestion → triage → classify → cache → ocr → analyze → docx.
+Cuce insieme le Fasi 1-7 in un'unica pipeline end-to-end:
+    ZIP → estrazione → triage → classifier → cache prompt → OCR → analyze
+        → parse YAML → builder docx incrementale → merge → output
 
-Per ora ritorna solo un payload di riconoscimento per validare l'isolamento V2.
+Caratteristiche:
+- API uniforme: process_zip_v2(zip_bytes, api_key, ...) -> dict
+- SSE typed events emessi attraverso ogni fase (Fase 6)
+- Token meter integrato (Fase 7.5)
+- Dry-run mode: process_zip_v2(..., dry_run=True) → nessuna chiamata Gemini,
+  pipeline produce comunque docx valido per smoke E2E
+- Cleanup automatico delle risorse (sezioni partial, OCR manifest, file
+  uploaded a Gemini Files API)
+- Mai eccezione propagata: errori finiscono in event SSE error + return dict
+  con success=False
 """
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stub Fase 0 — mantenuto per compat con /api/v2/health
+# ──────────────────────────────────────────────────────────────────────────────
 
 def process_v2_stub() -> Dict[str, Any]:
-    """
-    Stub di Fase 0. Conferma che il namespace V2 è raggiungibile e isolato.
-
-    Returns:
-        Dict con metadati di salute della pipeline V2.
-    """
+    """Stub originale (Fase 0). Ora la pipeline reale è process_zip_v2."""
     return {
         "status": "v2_stub_alive",
-        "version": "0.1.0-alpha",
-        "phase": "0_setup",
+        "version": "0.8.0-alpha",
+        "phase": "8_orchestrator",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "message": (
-            "Pipeline V2 namespace attivo. Implementazione end-to-end in arrivo "
-            "nelle Fasi 1-8. Vedi docs/V2_EXECUTION_TRACKER.md per stato."
-        ),
+        "message": "Pipeline V2 orchestrator attivo. Endpoint reale: /api/v2/report/process",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Smart batching (replica V1 First Fit Decreasing)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _create_smart_batches(
+    documents: List[Dict[str, Any]],
+    max_files: int = 4,
+    max_chars: int = 50_000,
+) -> List[List[Dict[str, Any]]]:
+    """
+    First Fit Decreasing per char count, replica V1 senza importare da V1.
+    Documents con `content` (o `extracted_text`) come testo da contare.
+    """
+    def _content_len(d: Dict[str, Any]) -> int:
+        return len(d.get("content") or d.get("extracted_text") or "")
+
+    sorted_docs = sorted(documents, key=_content_len, reverse=True)
+    batches: List[List[Dict[str, Any]]] = []
+    batch_chars: List[int] = []
+
+    for doc in sorted_docs:
+        cl = _content_len(doc)
+        placed = False
+        for i, batch in enumerate(batches):
+            if len(batch) < max_files and (batch_chars[i] + cl) <= max_chars:
+                batch.append(doc)
+                batch_chars[i] += cl
+                placed = True
+                break
+        if not placed:
+            batches.append([doc])
+            batch_chars.append(cl)
+    return batches
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dry-run mock data
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DRY_RUN_YAML = """
+meta:
+  azienda:
+    nome: "DRY RUN COMPANY SRL"
+    piva: "00000000000"
+    sede: "Via Test 1"
+  audit:
+    data_estrazione: "01/05/2026"
+  indice:
+    - {n: 1, tipo: "Visura Camerale", titolo: "Visura demo", categoria: "08 Legale"}
+
+sezioni:
+  - id: "08"
+    nome: "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA"
+    documenti:
+      - tipo: "Visura Camerale"
+        titolo: "Visura demo"
+        categoria: "08 · LEGALE"
+        riferimento: "DRY-RUN"
+        data_doc: "01/01/2025"
+        emesso_da: "DRY-RUN"
+        soggetto: "DRY RUN COMPANY SRL"
+"""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline orchestrator
+# ──────────────────────────────────────────────────────────────────────────────
+
+def process_zip_v2(
+    zip_bytes: bytes,
+    session_id: str,
+    api_key: Optional[str] = None,
+    emitter=None,
+    dry_run: bool = False,
+    output_dir: Optional[Path] = None,
+    _client=None,  # injectable per test
+) -> Dict[str, Any]:
+    """
+    Pipeline V2 completa.
+
+    Args:
+        zip_bytes: contenuto ZIP da elaborare
+        session_id: identificatore univoco run (alphanumerico_-)
+        api_key: chiave Gemini. Se None, legge da env GEMINI_API_KEY.
+                 In dry_run è ignorata.
+        emitter: SSEEmitter istanziato dal caller (None per uso programmatico)
+        dry_run: se True, NESSUNA chiamata Gemini reale; usa mock pre-canned
+        output_dir: directory per il docx finale (default temp/v2_output/)
+        _client: genai.Client injectable (per test); altrimenti costruito da api_key
+
+    Returns:
+        Dict con success/error e metadati (output_path, company_name, stats).
+        Mai eccezione propagata.
+    """
+    from v2 import token_meter
+    from v2.docx_merger import merge_session_sections
+    from v2.incremental_docx_builder import (
+        build_all_sections, builder_summary, cleanup_session_sections,
+    )
+    from v2.schemas.events import (
+        DoneEvent, ErrorKind, PipelinePhase,
+    )
+    from v2.yaml_parser import extract_company_name, parse_aggregated_yaml
+    from v2.zip_extractor import (
+        cleanup_extraction, extract_summary, extract_zip_bytes,
+    )
+
+    pipeline_start = time.monotonic()
+
+    # Default output dir
+    if output_dir is None:
+        webapp_dir = Path(__file__).resolve().parent.parent
+        output_dir = webapp_dir.parent / "temp" / "v2_output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # No-op emitter se non fornito (rende la chiamata sicura senza SSE)
+    class _NoopEmitter:
+        def __getattr__(self, name):
+            return lambda *a, **kw: True
+        session_id = ""
+
+    if emitter is None:
+        emitter = _NoopEmitter()
+        emitter.session_id = session_id  # type: ignore
+
+    # ── Validazione iniziale ─────────────────────────────────────────────
+    if not isinstance(zip_bytes, (bytes, bytearray)) or not zip_bytes:
+        emitter.emit_error(ErrorKind.UNKNOWN, "zip_bytes vuoto o non bytes")
+        return {"success": False, "error": "invalid_zip_bytes"}
+
+    # ── FASE: ingestion (estrazione ZIP) ─────────────────────────────────
+    extract_dir = None
+    files: List[Dict[str, Any]] = []
+    try:
+        emitter.emit_phase_start(PipelinePhase.INGESTION)
+        files, extract_dir = extract_zip_bytes(zip_bytes, session_id)
+        ext_summary = extract_summary(files)
+        emitter.emit_phase_end(
+            PipelinePhase.INGESTION,
+            duration_seconds=round(time.monotonic() - pipeline_start, 2),
+            metrics=ext_summary,
+        )
+        if not files:
+            emitter.emit_error(ErrorKind.UNKNOWN, "ZIP vuoto o nessun file estratto")
+            return {"success": False, "error": "empty_zip"}
+    except ValueError as e:
+        emitter.emit_error(ErrorKind.UNKNOWN, f"estrazione_zip_fallita: {e}")
+        return {"success": False, "error": f"extraction_failed: {e}"}
+    except Exception as e:
+        emitter.emit_error(ErrorKind.UNKNOWN, f"errore_imprevisto: {e}")
+        return {"success": False, "error": f"unexpected_extraction: {e}"}
+
+    # ── Client Gemini (skip in dry_run) ─────────────────────────────────
+    client = _client
+    if not dry_run and client is None:
+        try:
+            from v2.genai_factory_v2 import create_genai_client_v2
+            client = create_genai_client_v2(api_key=api_key)
+        except Exception as e:
+            emitter.emit_error(ErrorKind.API_AUTH, f"client_creation: {e}")
+            cleanup_extraction(extract_dir)
+            return {"success": False, "error": f"no_client: {e}"}
+
+    # ── FASE: triage (Fase 1) ────────────────────────────────────────────
+    from v2.file_triage import triage_files, triage_summary
+    phase_start = time.monotonic()
+    emitter.emit_phase_start(PipelinePhase.TRIAGE, total_items=len(files))
+    triaged = triage_files(files)
+    triage_sum = triage_summary(triaged)
+    emitter.emit_phase_end(
+        PipelinePhase.TRIAGE,
+        duration_seconds=round(time.monotonic() - phase_start, 2),
+        metrics=triage_sum,
+    )
+
+    # ── FASE: classify (Fase 2) ──────────────────────────────────────────
+    # Tutti i file con o senza testo (anche pre-OCR) vengono classificati
+    files_for_classify = (
+        triaged.get("native_text", [])
+        + triaged.get("needs_ocr", [])
+    )
+
+    classified: List = []
+    if files_for_classify and not dry_run:
+        from v2.document_classifier import classify_files_batch, classifier_summary
+        phase_start = time.monotonic()
+        emitter.emit_phase_start(PipelinePhase.CLASSIFY, total_items=len(files_for_classify))
+        try:
+            classified = classify_files_batch(
+                files_for_classify,
+                api_key=api_key,
+                _client=client,
+                meter_session_id=session_id,
+            )
+        except Exception as e:
+            emitter.emit_error(ErrorKind.UNKNOWN, f"classifier_error: {e}")
+            classified = []
+        emitter.emit_phase_end(
+            PipelinePhase.CLASSIFY,
+            duration_seconds=round(time.monotonic() - phase_start, 2),
+            metrics=classifier_summary(classified) if classified else {},
+        )
+
+    # ── FASE: OCR (Fase 4) ───────────────────────────────────────────────
+    needs_ocr_files = triaged.get("needs_ocr", [])
+    ocr_results: List = []
+    if needs_ocr_files and not dry_run:
+        from v2.gemini_ocr_v2 import ocr_extract_files, ocr_summary
+        phase_start = time.monotonic()
+        emitter.emit_phase_start(PipelinePhase.OCR, total_items=len(needs_ocr_files))
+        try:
+            ocr_results = ocr_extract_files(
+                client,
+                needs_ocr_files,
+                session_id=session_id,
+                cleanup_after=True,
+                meter_session_id=session_id,
+            )
+            # Aggiorna i file con il testo estratto
+            ocr_text_by_filename = {
+                r.filename: r.text for r in ocr_results if r.success
+            }
+            for f in needs_ocr_files:
+                if f["filename"] in ocr_text_by_filename:
+                    f["extracted_text"] = ocr_text_by_filename[f["filename"]]
+        except Exception as e:
+            emitter.emit_error(ErrorKind.OCR_FAILED, f"ocr_pipeline: {e}")
+        emitter.emit_phase_end(
+            PipelinePhase.OCR,
+            duration_seconds=round(time.monotonic() - phase_start, 2),
+            metrics=ocr_summary(ocr_results) if ocr_results else {},
+        )
+
+    # ── Costruisci documents finali per analyze ─────────────────────────
+    # Includiamo tutti i file con extracted_text non vuoto (PDF nativi + OCR)
+    documents = []
+    for f in (triaged.get("native_text", []) + needs_ocr_files):
+        text = (f.get("extracted_text") or "").strip()
+        if text:
+            documents.append({
+                "filename": f["filename"],
+                "content": text,
+            })
+
+    if not documents and not dry_run:
+        emitter.emit_error(ErrorKind.UNKNOWN, "Nessun documento con testo estratto")
+        cleanup_extraction(extract_dir)
+        return {"success": False, "error": "no_extractable_documents"}
+
+    # ── FASE: cache prompt + analyze (Fase 3 + 5) ───────────────────────
+    raw_yamls: List[str] = []
+    if dry_run:
+        # Dry-run: usa mock YAML pre-canned
+        raw_yamls = [_DRY_RUN_YAML]
+    else:
+        from v2.cache_manager import get_cached_prompt
+        from v2.gemini_client_v2 import analyze_batch_streaming
+
+        cached_id = get_cached_prompt(client)
+        batches = _create_smart_batches(documents, max_files=4, max_chars=50_000)
+
+        phase_start = time.monotonic()
+        emitter.emit_phase_start(PipelinePhase.ANALYZE, total_items=len(batches))
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        max_workers = min(7, len(batches))
+        completed = 0
+        results_by_idx: Dict[int, str] = {}
+
+        def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]]):
+            result = analyze_batch_streaming(
+                client=client,
+                batch_docs=batch_docs,
+                batch_idx=idx,
+                total_docs=len(documents),
+                cached_content_id=cached_id,
+                meter_session_id=session_id,
+            )
+            return idx, result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_analyze_one, i, b): i
+                for i, b in enumerate(batches)
+            }
+            for fut in as_completed(futures):
+                try:
+                    idx, result = fut.result()
+                    if result and result.text and not result.error:
+                        results_by_idx[idx] = result.text
+                except Exception as e:
+                    emitter.emit_error(ErrorKind.UNKNOWN, f"batch_analyze: {e}")
+                completed += 1
+                emitter.emit_phase_tick(
+                    PipelinePhase.ANALYZE,
+                    pct=completed / max(len(batches), 1),
+                    detail={"completed": completed, "total": len(batches)},
+                )
+
+        # Mantieni ordine batch
+        raw_yamls = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
+
+        emitter.emit_phase_end(
+            PipelinePhase.ANALYZE,
+            duration_seconds=round(time.monotonic() - phase_start, 2),
+            metrics={"batches_total": len(batches), "batches_ok": len(raw_yamls)},
+        )
+
+    if not raw_yamls:
+        emitter.emit_error(ErrorKind.UNKNOWN, "Nessun batch ha prodotto YAML utile")
+        cleanup_extraction(extract_dir)
+        return {"success": False, "error": "no_yaml_output"}
+
+    # ── Parse YAML aggregato ─────────────────────────────────────────────
+    full_yaml = "\n\n---\n\n".join(raw_yamls)
+    parsed_data = parse_aggregated_yaml(full_yaml)
+    company_name = extract_company_name(parsed_data)
+
+    # ── FASE: docx_build (Fase 7) ────────────────────────────────────────
+    phase_start = time.monotonic()
+    emitter.emit_phase_start(PipelinePhase.DOCX_BUILD)
+    docs_estratti = len(documents)
+    docs_vuoti = max(0, len(files) - docs_estratti)
+    build_results = build_all_sections(
+        parsed_data,
+        session_id=session_id,
+        docs_estratti=docs_estratti,
+        docs_vuoti=docs_vuoti,
+    )
+    build_sum = builder_summary(build_results)
+    emitter.emit_phase_end(
+        PipelinePhase.DOCX_BUILD,
+        duration_seconds=round(time.monotonic() - phase_start, 2),
+        metrics=build_sum,
+    )
+
+    # ── Merge finale ─────────────────────────────────────────────────────
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_company = "".join(c for c in company_name if c.isalnum() or c == " ")[:30]
+    safe_company = safe_company.replace(" ", "_") or "AUDIT"
+    final_filename = f"Audit_V2_{safe_company}_{timestamp}.docx"
+    final_path = output_dir / f"{session_id}_final.docx"
+
+    merge_result = merge_session_sections(session_id, final_path)
+    if not merge_result.success:
+        emitter.emit_error(ErrorKind.UNKNOWN, f"merge_failed: {merge_result.error}")
+        cleanup_session_sections(session_id)
+        cleanup_extraction(extract_dir)
+        return {"success": False, "error": f"merge_failed: {merge_result.error}"}
+
+    # ── Cleanup ──────────────────────────────────────────────────────────
+    phase_start = time.monotonic()
+    emitter.emit_phase_start(PipelinePhase.CLEANUP)
+    cleanup_session_sections(session_id)
+    cleanup_extraction(extract_dir)
+    emitter.emit_phase_end(
+        PipelinePhase.CLEANUP,
+        duration_seconds=round(time.monotonic() - phase_start, 2),
+    )
+
+    # ── Token report finale ──────────────────────────────────────────────
+    token_report = token_meter.get_session_report(session_id)
+
+    total_duration = round(time.monotonic() - pipeline_start, 2)
+    stats = {
+        "total_files_in_zip": len(files),
+        "documents_with_text": docs_estratti,
+        "duration_seconds": total_duration,
+        "company_name": company_name,
+        "tokens": {
+            "input_total": token_report.get("total_input", 0),
+            "cached_total": token_report.get("total_cached", 0),
+            "output_total": token_report.get("total_output", 0),
+            "cost_eur": token_report.get("total_cost_eur", 0.0),
+            "saved_by_caching_eur": token_report.get("saved_by_caching_eur", 0.0),
+        },
+        "dry_run": dry_run,
+    }
+
+    emitter.emit_done(
+        output_filename=final_filename,
+        company_name=company_name,
+        duration_seconds=total_duration,
+        stats=stats,
+    )
+
+    return {
+        "success": True,
+        "output_path": str(final_path),
+        "output_filename": final_filename,
+        "company_name": company_name,
+        "stats": stats,
+        "merge_used_fallback": merge_result.used_fallback,
     }

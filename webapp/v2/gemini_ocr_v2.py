@@ -71,11 +71,23 @@ class OCRResult:
 # Inferenza singola (1 file_uri → testo)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _maybe_record_meter(response, model: str, meter_session_id: Optional[str]) -> None:
+    """Registra token usage se session_id fornito. Mai eccezione."""
+    if not meter_session_id:
+        return
+    try:
+        from v2 import token_meter
+        token_meter.record_from_response(meter_session_id, response, model, kind="ocr")
+    except Exception as e:
+        print(f"[V2 OCR] meter record fallito: {e}")
+
+
 def _infer_with_uri(
     client,
     file_uri: str,
     mime_type: str,
     model: str = OCR_MODEL_PRIMARY,
+    meter_session_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Esegue 1 chiamata Gemini Vision usando Part.from_uri.
@@ -105,6 +117,7 @@ def _infer_with_uri(
             contents=contents,
             config=config,
         )
+        _maybe_record_meter(response, model, meter_session_id)
 
         text = getattr(response, "text", None) or ""
         text = text.strip()
@@ -124,6 +137,7 @@ def _ocr_single_file(
     client,
     file_info: Dict[str, Any],
     manifest,
+    meter_session_id: Optional[str] = None,
 ) -> OCRResult:
     """
     Processa un singolo file: upload (con dedup) → inferenza.
@@ -152,12 +166,14 @@ def _ocr_single_file(
     from v2.file_uploader import guess_mime_type
     mime = guess_mime_type(path)
 
-    text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_PRIMARY)
+    text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_PRIMARY,
+                            meter_session_id=meter_session_id)
     method = "files_api_native"
 
     # 3) Fallback al modello lite se primario non produce testo
     if not text:
-        text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_FALLBACK)
+        text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_FALLBACK,
+                                meter_session_id=meter_session_id)
         method = "files_api_native_fallback"
 
     if not text:
@@ -186,6 +202,7 @@ def ocr_extract_files(
     session_id: str,
     cleanup_after: bool = True,
     max_workers: int = MAX_OCR_INFERENCES_PARALLEL,
+    meter_session_id: Optional[str] = None,
 ) -> List[OCRResult]:
     """
     Esegue OCR su una lista di file (tipicamente bucket `needs_ocr` da Fase 1).
@@ -224,7 +241,7 @@ def ocr_extract_files(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_idx = {
-            executor.submit(_ocr_single_file, client, f, manifest): i
+            executor.submit(_ocr_single_file, client, f, manifest, meter_session_id): i
             for i, f in enumerate(files)
         }
         for future in as_completed(future_to_idx):

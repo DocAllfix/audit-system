@@ -136,6 +136,7 @@ def analyze_batch_streaming(
     on_marker: Optional[Callable[[ParsedMarker], None]] = None,
     max_chars: int = DEFAULT_MAX_CHARS,
     enable_retry: bool = True,
+    meter_session_id: Optional[str] = None,
 ) -> StreamResult:
     """
     Analizza un batch di documenti via streaming Gemini.
@@ -191,6 +192,7 @@ def analyze_batch_streaming(
                 cached_content_id=cached_content_id,
                 buf=buf,
                 parser=parser,
+                meter_session_id=meter_session_id,
             )
         except _StreamRetryable as e:
             last_error = str(e)
@@ -222,6 +224,7 @@ def _do_streaming_call(
     cached_content_id: Optional[str],
     buf: StreamBuffer,
     parser: YamlStreamParser,
+    meter_session_id: Optional[str] = None,
 ) -> StreamResult:
     """
     Esegue una singola chiamata streaming. Solleva _StreamRetryable su errori
@@ -250,6 +253,7 @@ def _do_streaming_call(
     config = gtypes.GenerateContentConfig(**config_kwargs)
 
     last_chunk_time = time.monotonic()
+    last_chunk = None  # tracciato per token metering (usage_metadata arriva nell'ultimo)
     stream = None
     try:
         stream = client.models.generate_content_stream(
@@ -266,6 +270,7 @@ def _do_streaming_call(
                     f"inter_chunk_timeout: nessun chunk per {INTER_CHUNK_TIMEOUT}s"
                 )
             last_chunk_time = now
+            last_chunk = chunk
 
             # Append nel buffer (rispetta cap)
             can_continue = buf.append_chunk(chunk)
@@ -277,6 +282,15 @@ def _do_streaming_call(
 
         # Stream completato normalmente
         parser.finalize()
+        # Token metering opzionale (Fase 7.5): usage_metadata arriva nell'ultimo chunk
+        if meter_session_id and last_chunk is not None:
+            try:
+                from v2 import token_meter
+                token_meter.record_from_response(
+                    meter_session_id, last_chunk, ANALYZE_MODEL, kind="analyze"
+                )
+            except Exception as e:
+                print(f"[V2 STREAM] meter record fallito: {e}")
         return buf.finalize()
 
     except _StreamRetryable:

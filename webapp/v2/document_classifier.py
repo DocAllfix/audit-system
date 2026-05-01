@@ -154,10 +154,27 @@ def _build_user_prompt(files: List[Dict[str, Any]]) -> str:
 # Chiamata API con retry e structured output
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _maybe_record_meter(
+    response,
+    model: str,
+    kind: str,
+    meter_session_id: Optional[str] = None,
+) -> None:
+    """Registra token usage se meter_session_id fornito. Mai eccezione."""
+    if not meter_session_id:
+        return
+    try:
+        from v2 import token_meter
+        token_meter.record_from_response(meter_session_id, response, model, kind=kind)
+    except Exception as e:
+        print(f"[V2 CLASSIFIER] meter record fallito: {e}")
+
+
 def _call_classifier_api(
     client,
     model: str,
     user_prompt: str,
+    meter_session_id: Optional[str] = None,
 ) -> Optional[ClassificationBatchOutput]:
     """
     Chiama Gemini con response_schema strutturato.
@@ -190,6 +207,9 @@ def _call_classifier_api(
                 contents=user_prompt,
                 config=config,
             )
+            # Token metering opzionale (Fase 7.5)
+            _maybe_record_meter(response, model, kind="classify",
+                                 meter_session_id=meter_session_id)
             # Il SDK con response_schema espone la risposta parsata in `response.parsed`
             parsed = getattr(response, "parsed", None)
             if isinstance(parsed, ClassificationBatchOutput):
@@ -217,6 +237,7 @@ def _double_check_low_confidence(
     client,
     classified: List[ClassifiedFile],
     files_index: Dict[str, Dict[str, Any]],
+    meter_session_id: Optional[str] = None,
 ) -> List[ClassifiedFile]:
     """
     Per i ClassifiedFile con confidence < soglia, ri-classifica con flash 2.5.
@@ -239,7 +260,8 @@ def _double_check_low_confidence(
         return classified
 
     user_prompt = _build_user_prompt(files_to_recheck)
-    result = _call_classifier_api(client, MODEL_STAGE2, user_prompt)
+    result = _call_classifier_api(client, MODEL_STAGE2, user_prompt,
+                                    meter_session_id=meter_session_id)
 
     if not result or not result.files:
         # Double-check fallito → mantieni risultati stage 1 (ma marca needs_double_check=True)
@@ -272,6 +294,7 @@ def classify_files_batch(
     api_key: Optional[str] = None,
     _client=None,
     enable_double_check: bool = True,
+    meter_session_id: Optional[str] = None,
 ) -> List[ClassifiedFile]:
     """
     Classifica una lista di file_info (formato output di file_triage V2).
@@ -322,7 +345,8 @@ def classify_files_batch(
         batch = files_to_classify[batch_start:batch_start + MAX_BATCH_SIZE]
         batch_files = [b[1] for b in batch]
         user_prompt = _build_user_prompt(batch_files)
-        result = _call_classifier_api(client, MODEL_STAGE1, user_prompt)
+        result = _call_classifier_api(client, MODEL_STAGE1, user_prompt,
+                                        meter_session_id=meter_session_id)
 
         if result is None or not result.files:
             # API fallita → fallback offline per questo batch
@@ -349,7 +373,10 @@ def classify_files_batch(
     if enable_double_check and api_results:
         files_index = {f.get("filename", ""): f for f in files}
         api_list = [api_results[i] for i in sorted(api_results.keys())]
-        api_list = _double_check_low_confidence(client, api_list, files_index)
+        api_list = _double_check_low_confidence(
+            client, api_list, files_index,
+            meter_session_id=meter_session_id,
+        )
         # Ri-mappa per indice
         for new_cf, orig_idx in zip(api_list, sorted(api_results.keys())):
             api_results[orig_idx] = new_cf

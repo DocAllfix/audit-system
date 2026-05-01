@@ -28,11 +28,12 @@ def test_v2_namespace_importable():
 
 
 def test_v2_stub_returns_alive():
-    """Lo stub di Fase 0 risponde con il payload corretto."""
+    """Lo stub V2 risponde con il payload atteso (la fase si aggiorna nel tempo)."""
     from v2.pipeline import process_v2_stub
     payload = process_v2_stub()
     assert payload["status"] == "v2_stub_alive"
-    assert payload["phase"] == "0_setup"
+    # `phase` indica la fase attuale di sviluppo V2 (es. "0_setup", "8_orchestrator")
+    assert "phase" in payload and isinstance(payload["phase"], str)
     assert "timestamp" in payload
     assert payload["timestamp"].endswith("Z")
 
