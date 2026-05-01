@@ -25,7 +25,7 @@ BATCH_SIZE = 8  # Tuning conservativo (Middle Ground)
 MAX_BATCH_CHARS = 40000       # Target ~40k chars per batch (micro-batching)
 MAX_RETRIES = 1  # Fail fast per errori strutturali
 PARALLEL_BATCHES = True  # Abilita esecuzione parallela batch
-MAX_API_WORKERS = 10           # Tuning: 10 worker (Bilanciamento Speed/Stability)
+MAX_API_WORKERS = 7            # Allineato al semaforo gemini_structured_slot (vedi gemini_throttle.py)
 
 # Vincoli qualità
 MIN_WORDS_PER_PARAGRAPH = 50   # Ridotto per accettare cert. semplici/fatture sintetiche
@@ -35,7 +35,7 @@ MAX_WORDS_PER_PARAGRAPH = 800
 TESSERACT_PATH = os.environ.get("TESSERACT_PATH", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 POPPLER_PATH = os.environ.get("POPPLER_PATH", r"C:\Program Files\poppler\bin")
 OCR_LANGUAGES = "ita+eng"  # Lingue per OCR Tesseract
-MAX_OCR_WORKERS = 10 # Chiave a pagamento: 10 worker OCR paralleli (da 6)
+MAX_OCR_WORKERS = 5  # Allineato al semaforo gemini_ocr_slot (vedi gemini_throttle.py)
 
 # Mappatura template checklist per norma (nomi file reali in templates/)
 CHECKLIST_TEMPLATES = {
@@ -99,4 +99,33 @@ SUPPORTED_NORMS = ["ISO 9001", "ISO 14001", "ISO 45001", "ISO 14064", "ESG", "PA
 # Lasciare vuoto per connessione diretta (default)
 GEMINI_PROXY_URL = os.environ.get("GEMINI_PROXY_URL", "")
 GEMINI_PROXY_SECRET = os.environ.get("GEMINI_PROXY_SECRET", "")
+
+# ==============================================================================
+# PIPELINE V2 (Metodo A — Triage Funnel) — additiva, non altera V1
+# ==============================================================================
+# Feature flag globale: se "true" e l'utente è in V2_USER_WHITELIST, l'endpoint
+# storico /api/report/process viene rediretto internamente a V2.
+# Default "false": V2 risponde solo su /api/v2/* per testing isolato.
+USE_V2_PIPELINE = os.environ.get("USE_V2_PIPELINE", "false").lower() == "true"
+
+# Whitelist utenti per attivazione progressiva. Solo questi user_id vedono V2
+# anche con USE_V2_PIPELINE=true. Vuoto = nessuno (V1 per tutti).
+V2_USER_WHITELIST = [
+    u.strip()
+    for u in os.environ.get("V2_USER_WHITELIST", "DocAllfix").split(",")
+    if u.strip()
+]
+
+# Subprocess isolation per V2 (Fase 8.5). Default OFF in dev, ON in prod.
+V2_USE_SUBPROCESS = os.environ.get("V2_USE_SUBPROCESS", "false").lower() == "true"
+
+# TTL persistenza progress (secondi). Default 7 giorni live + 30 giorni archive.
+V2_PROGRESS_TTL_LIVE_SECONDS = int(os.environ.get("V2_PROGRESS_TTL_LIVE", "604800"))
+V2_PROGRESS_TTL_ARCHIVE_SECONDS = int(os.environ.get("V2_PROGRESS_TTL_ARCHIVE", "2592000"))
+
+# Cache Gemini context (Fase 3). TTL standard 1h.
+V2_CACHE_TTL_SECONDS = int(os.environ.get("V2_CACHE_TTL_SECONDS", "3600"))
+
+# Cap di sicurezza globale sulla risposta API (Fase 5). Previene crash lxml.
+V2_MAX_RESPONSE_CHARS = int(os.environ.get("V2_MAX_RESPONSE_CHARS", "400000"))
 

@@ -458,7 +458,41 @@ async def process_report(
             queue.put({"pct": pct, "msg": msg}), loop
         )
 
+    # ── PRE-FLIGHT: analisi ZIP per warning early ────────────────────────────
+    # Counto file e stimo tempi prima di iniziare il processing pesante.
+    # Errori silenziosi: se la validazione fallisce, non blocchiamo niente.
+    preflight_warnings = []
+    try:
+        import zipfile as _zf
+        from io import BytesIO as _BIO
+        with _zf.ZipFile(_BIO(file_bytes)) as zfp:
+            file_count = sum(1 for n in zfp.namelist() if not n.endswith("/"))
+        size_mb = len(file_bytes) / (1024 * 1024)
+
+        if size_mb > 200:
+            preflight_warnings.append(
+                f"ZIP molto grande ({size_mb:.0f} MB). Tempo di elaborazione stimato: "
+                f"{int(size_mb * 0.4)}-{int(size_mb * 0.7)} minuti. "
+                f"Per stabilità ottimale, considera di splittare in 2 batch."
+            )
+        if file_count > 200:
+            preflight_warnings.append(
+                f"Molti file ({file_count}). Possibili rallentamenti su file con immagini scansionate."
+            )
+        if size_mb > 300 or file_count > 300:
+            preflight_warnings.append(
+                "ATTENZIONE: dimensioni elevate aumentano il rischio di timeout. "
+                "Se l'elaborazione fallisce, splitta lo ZIP."
+            )
+    except Exception as _exc:
+        # Non blocchiamo mai per fallimenti pre-flight
+        logger.debug(f"[Tab1] preflight skipped: {_exc}")
+
     async def event_stream():
+        # Pubblica warnings pre-flight come primo evento (se presenti)
+        if preflight_warnings:
+            yield f"data: {json.dumps({'preflight_warnings': preflight_warnings}, ensure_ascii=False)}\n\n"
+
         def _run():
             return process_zip_and_generate_report(
                 input_source=file_bytes,
@@ -503,6 +537,24 @@ async def process_report(
                     pass
 
                 logger.info(f"[Tab1] OK → {filename} ({len(word_bytes)//1024} KB)")
+
+                # Evento summary se ci sono file falliti (frontend può mostrarli prima del download)
+                ff = stats.get("failed_files") or []
+                if ff:
+                    summary = {
+                        "summary": True,
+                        "files_total": stats.get("total_docs", 0),
+                        "files_processed": stats.get("docs_with_text", 0),
+                        "files_failed": len(ff),
+                        "failed_breakdown": [
+                            {"filename": f.get("filename"),
+                             "type": f.get("type", "unknown"),
+                             "reason": str(f.get("reason", ""))[:200]}
+                            for f in ff[:50]   # cap a 50 per non gonfiare payload
+                        ],
+                    }
+                    yield f"data: {json.dumps(summary, ensure_ascii=False)}\n\n"
+
                 done_event = {
                     "done": True,
                     "filename": filename,
@@ -530,6 +582,30 @@ async def process_report(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PIPELINE V2 (Metodo A — Triage Funnel) — endpoint isolato per testing
+# Vedi docs/V2_EXECUTION_TRACKER.md
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/v2/health")
+async def v2_health():
+    """Health check del namespace V2 (Fase 0). Non richiede auth."""
+    from v2.pipeline import process_v2_stub
+    return process_v2_stub()
+
+
+@app.post("/api/v2/report/process")
+async def v2_process_report_stub(user: Dict = Depends(_get_current_user)):
+    """
+    Endpoint stub Fase 0. Sarà sostituito in Fase 8 con orchestrator completo.
+    Richiede auth come V1 per parità di superficie.
+    """
+    from v2.pipeline import process_v2_stub
+    payload = process_v2_stub()
+    payload["user"] = user.get("username")
+    return payload
 
 
 # ══════════════════════════════════════════════════════════════════════════════
