@@ -217,6 +217,73 @@ def _normalize_doc_entry(d: Any) -> Dict[str, Any]:
     return out
 
 
+# Chiavi top-level del YAML batch che NON appartengono al documento singolo
+# (sono gestite separatamente): meta, azienda, indice, audit, sezioni
+_NON_DOC_TOP_KEYS = {"meta", "azienda", "indice", "audit", "sezioni"}
+
+
+def _extract_top_level_doc(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Riconosce la struttura YAML "piatta" prodotta dal modello quando il
+    batch contiene un solo documento. Ritorna il dict del documento se
+    rilevato, None altrimenti.
+
+    Struttura piatta tipica:
+        azienda: {...}
+        indice: [...]
+        tipo: "Visura Camerale"          ← top-level
+        categoria: "08 · LEGALE"
+        titolo: "..."
+        emesso_da: "..."
+        soggetto: "..."
+        ... (altri campi del documento)
+
+    Distinzione: se è presente `sezioni` (struttura annidata), questa
+    funzione ritorna None — la logica esistente la gestisce.
+
+    Heuristica: serve almeno `tipo` o `titolo` al top-level perché sia
+    riconosciuto come documento valido (evita falsi positivi su batch
+    che hanno solo meta/azienda/indice).
+    """
+    if not isinstance(d, dict):
+        return None
+    # Se ha già una struttura annidata, non è "piatto"
+    if d.get("sezioni"):
+        return None
+    has_tipo = bool(str(d.get("tipo", "")).strip())
+    has_titolo = bool(str(d.get("titolo", "")).strip())
+    if not (has_tipo or has_titolo):
+        return None
+
+    # Costruisci dict documento estraendo TUTTE le chiavi che non sono meta-level
+    doc: Dict[str, Any] = {}
+    for k, v in d.items():
+        if k in _NON_DOC_TOP_KEYS:
+            continue
+        doc[k] = v
+    return _normalize_doc_entry(doc) or None
+
+
+def _section_key_from_categoria(categoria: Any) -> Optional[tuple]:
+    """
+    Estrae (id, nome) di sezione dal campo `categoria` di un documento.
+
+    Esempi:
+      "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA" -> ("08", "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA")
+      "10 · SSL"                                 -> ("10", "10 · SSL")
+      "" o non-string                            -> None
+    """
+    if not isinstance(categoria, str):
+        return None
+    cat = categoria.strip()
+    if not cat:
+        return None
+    # Estrai prefix numerico (id sezione)
+    m = re.match(r"^(\d{1,2})\s*[·\-—]?\s*", cat)
+    sec_id = m.group(1) if m else ""
+    return (sec_id, cat)
+
+
 def _normalize_company_name(name: Any) -> str:
     """Pulisce e valida il nome azienda. '' se invalido."""
     if not isinstance(name, str):
@@ -231,6 +298,42 @@ def _normalize_company_name(name: Any) -> str:
     if cleaned.startswith("[") and cleaned.endswith("]"):
         return ""
     return cleaned
+
+
+def _score_company_source(block_tipi: List[str]) -> int:
+    """
+    Scoring V1-style per qualità della fonte del nome azienda.
+
+    Replica esattamente la logica di V1 structured_evidence_parser:
+    - Visura camerale / CCIAA / registro imprese: +100 (massima affidabilità)
+    - Statuto / atto costitutivo: +80
+    - Attestazione SOA / certificato ISO / rating legalità: +60
+    - Fattura / bilancio: +30
+    - DVR / curriculum / attestato formazione / registro presenze: -50
+      (penalità: il "soggetto" estratto è probabilmente consulente/formatore
+      esterno, NON l'azienda audita)
+
+    Il batch con score più alto vince — questo evita di scegliere come
+    "azienda" il subappaltatore o il consulente RSPP citato nel DVR.
+    """
+    if not block_tipi:
+        return 0
+    tipi_joined = " ".join(block_tipi).lower()
+    score = 0
+    if re.search(r"visura|camerale|cciaa|registro imprese", tipi_joined):
+        score += 100
+    if re.search(r"statuto|atto costitutivo|atto notarile", tipi_joined):
+        score += 80
+    if re.search(r"attestazione soa|certificato iso|rating legalit", tipi_joined):
+        score += 60
+    if re.search(r"fattura|bilancio", tipi_joined):
+        score += 30
+    if re.search(
+        r"\bdvr\b|curriculum|cv |attestato.{0,30}formazione|registro.{0,5}presenze",
+        tipi_joined,
+    ):
+        score -= 50
+    return score
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -271,30 +374,67 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
             documents.append(d)
 
     # Aggrega i documenti
-    merged_meta_azienda: Dict[str, Any] = {}
     merged_indice: List[Dict[str, Any]] = []
     merged_audit: Dict[str, Any] = {}
     sezioni_by_name: Dict[str, Dict[str, Any]] = {}
+    # Candidate per il nome azienda con scoring V1-style
+    azienda_candidates: List[tuple] = []  # (score, azienda_dict)
+    # Merge accumulativo dei campi azienda secondari (piva/sede/REA/...)
+    # da tutti i batch — primo non-vuoto vince. Solo `nome` usa lo score.
+    merged_secondary_fields: Dict[str, Any] = {}
 
-    for d in documents:
+    for batch_idx, d in enumerate(documents):
         if not isinstance(d, dict):
             continue
 
+        # Tipi documento del batch corrente — usato per scoring azienda.
+        # Cerca SIA dentro sezioni → documenti SIA al top-level (struttura piatta).
+        block_tipi: List[str] = []
+        sezioni_in_batch = d.get("sezioni") or []
+        if isinstance(sezioni_in_batch, list):
+            for sez in sezioni_in_batch:
+                if not isinstance(sez, dict):
+                    continue
+                docs_list = sez.get("documenti") or []
+                if isinstance(docs_list, list):
+                    for doc in docs_list:
+                        if isinstance(doc, dict):
+                            tipo = str(doc.get("tipo", "")).lower().strip()
+                            if tipo:
+                                block_tipi.append(tipo)
+
+        # Documento al top-level (struttura "piatta" → 1 doc per batch)
+        top_level_doc = _extract_top_level_doc(d)
+        if top_level_doc is not None:
+            tipo_top = str(top_level_doc.get("tipo", "")).lower().strip()
+            if tipo_top:
+                block_tipi.append(tipo_top)
+
         # Meta
-        meta = d.get("meta") or d  # alcuni batch potrebbero non wrappare in 'meta'
+        meta = d.get("meta") or d
         if isinstance(meta, dict):
             azienda = meta.get("azienda") or d.get("azienda")
             if isinstance(azienda, dict):
-                # Merge campi solo se mancanti o vuoti in merged
+                az_nome = _normalize_company_name(azienda.get("nome"))
+                if az_nome:
+                    # Scoring V1-style per qualità della fonte (solo per `nome`)
+                    score = _score_company_source(block_tipi)
+                    candidate = dict(azienda)
+                    candidate["nome"] = az_nome
+                    azienda_candidates.append((score, candidate))
+                    print(
+                        f"[V2 PARSER] Batch #{batch_idx}: candidato azienda="
+                        f"'{az_nome}' score={score} (tipi={block_tipi[:3]})"
+                    )
+                # Merge campi secondari (piva/sede/REA/capitale/...) da TUTTI
+                # i batch — primo non-vuoto vince. Indipendente dal score.
                 for k, v in azienda.items():
+                    if k == "nome":
+                        continue  # gestito via score
                     if v in (None, "", {}, []):
                         continue
-                    if k == "nome":
-                        cleaned_name = _normalize_company_name(v)
-                        if cleaned_name and not merged_meta_azienda.get("nome"):
-                            merged_meta_azienda["nome"] = cleaned_name
-                    elif k not in merged_meta_azienda:
-                        merged_meta_azienda[k] = v
+                    if k not in merged_secondary_fields:
+                        merged_secondary_fields[k] = v
 
             indice = meta.get("indice") or d.get("indice")
             if isinstance(indice, list):
@@ -308,10 +448,9 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
                     if k not in merged_audit and v not in (None, "", {}, []):
                         merged_audit[k] = v
 
-        # Sezioni
-        sezioni = d.get("sezioni")
-        if isinstance(sezioni, list):
-            for sez in sezioni:
+        # Sezioni — struttura annidata
+        if isinstance(sezioni_in_batch, list):
+            for sez in sezioni_in_batch:
                 if not isinstance(sez, dict):
                     continue
                 nome = str(sez.get("nome", "")).strip()
@@ -324,13 +463,49 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
                         "nome": nome,
                         "documenti": [],
                     }
-                # Concat documenti
                 docs = sez.get("documenti")
                 if isinstance(docs, list):
                     for doc in docs:
                         norm = _normalize_doc_entry(doc)
                         if norm:
                             sezioni_by_name[key]["documenti"].append(norm)
+
+        # Documento top-level → ricostruisci la sua sezione dal campo `categoria`
+        if top_level_doc is not None:
+            sec_info = _section_key_from_categoria(top_level_doc.get("categoria"))
+            if sec_info is not None:
+                sec_id, sec_nome = sec_info
+                key = sec_nome.upper()
+                if key not in sezioni_by_name:
+                    sezioni_by_name[key] = {
+                        "id": sec_id,
+                        "nome": sec_nome,
+                        "documenti": [],
+                    }
+                sezioni_by_name[key]["documenti"].append(top_level_doc)
+
+    # Selezione finale azienda: nome dal vincitore score, altri campi
+    # dal merge accumulativo (best of both worlds vs V1).
+    merged_meta_azienda: Dict[str, Any] = {}
+    if azienda_candidates:
+        azienda_candidates.sort(key=lambda t: t[0], reverse=True)
+        best_score, best_azienda = azienda_candidates[0]
+        # Parti dai campi accumulati (piva/sede/...) e sovrascrivi solo
+        # con quelli del vincitore se ha più info
+        merged_meta_azienda = dict(merged_secondary_fields)
+        merged_meta_azienda["nome"] = best_azienda.get("nome", "")
+        # Aggiungi gli altri campi del vincitore se mancano
+        for k, v in best_azienda.items():
+            if k == "nome":
+                continue
+            if v in (None, "", {}, []):
+                continue
+            if k not in merged_meta_azienda:
+                merged_meta_azienda[k] = v
+        print(
+            f"[V2 PARSER] Nome azienda scelto: "
+            f"'{merged_meta_azienda.get('nome', '')}' (score={best_score})"
+        )
 
     # Assembla output finale
     return {

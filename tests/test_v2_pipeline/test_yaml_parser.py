@@ -199,6 +199,171 @@ sezioni: []
 # Parsing summary
 # ──────────────────────────────────────────────────────────────────────────────
 
+def test_parse_top_level_document_visura():
+    """
+    Bug MEDIL: il modello produce batch a struttura piatta quando contiene
+    un solo documento. La visura va riconosciuta + score 100 + sezione popolata.
+    """
+    flat_batch = """
+azienda:
+  nome: "CONSORZIO STABILE MEDIL S.C.P.A."
+  piva: "01483060628"
+  sede: "VIA VITTORIO VENETO 29 BENEVENTO"
+
+indice:
+  - {n: 1, tipo: "Visura Camerale", titolo: "VISURA ORDINARIA"}
+
+tipo: "Visura Camerale"
+categoria: "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA"
+titolo: "VISURA ORDINARIA SOCIETA' DI CAPITALE"
+emesso_da: "CCIAA Irpinia Sannio"
+soggetto: "CONSORZIO STABILE MEDIL S.C.P.A."
+data_doc: "10/02/2026"
+"""
+    result = yp.parse_aggregated_yaml(flat_batch)
+    # Nome azienda riconosciuto correttamente
+    assert result["meta"]["azienda"]["nome"] == "CONSORZIO STABILE MEDIL S.C.P.A."
+    # Sezione "08 · DOCUMENTAZIONE LEGALE..." popolata col documento
+    assert len(result["sezioni"]) == 1
+    sez = result["sezioni"][0]
+    assert "DOCUMENTAZIONE LEGALE" in sez["nome"]
+    assert sez["id"] == "08"
+    assert len(sez["documenti"]) == 1
+    doc = sez["documenti"][0]
+    assert doc["tipo"] == "Visura Camerale"
+    assert "VISURA ORDINARIA" in doc["titolo"]
+
+
+def test_top_level_doc_categoria_estrae_sezione():
+    """Sezione viene derivata correttamente dal campo `categoria` del documento top-level."""
+    flat = """
+azienda:
+  nome: "TEST SRL"
+tipo: "DVR"
+titolo: "Documento Valutazione Rischi"
+categoria: "10 · SALUTE E SICUREZZA SUL LAVORO"
+"""
+    result = yp.parse_aggregated_yaml(flat)
+    assert len(result["sezioni"]) == 1
+    sez = result["sezioni"][0]
+    assert sez["id"] == "10"
+    assert "SALUTE E SICUREZZA" in sez["nome"]
+
+
+def test_mixed_batches_top_level_and_nested():
+    """Aggregazione di batch eterogenei: alcuni piatti, altri annidati."""
+    flat_visura = """
+azienda:
+  nome: "MEDIL SRL"
+tipo: "Visura Camerale"
+categoria: "08 · LEGALE"
+titolo: "Visura"
+"""
+    nested_dvr = """
+meta:
+  azienda:
+    nome: "STUDIO RSPP"
+
+sezioni:
+  - id: "10"
+    nome: "10 · SSL"
+    documenti:
+      - tipo: "DVR"
+        titolo: "DVR cliente"
+"""
+    aggregated = flat_visura + "\n\n---\n\n" + nested_dvr
+    result = yp.parse_aggregated_yaml(aggregated)
+    # MEDIL vince per score visura (+100) vs DVR (-50)
+    assert result["meta"]["azienda"]["nome"] == "MEDIL SRL"
+    # Entrambe le sezioni presenti
+    sezioni_nomi = {s["nome"] for s in result["sezioni"]}
+    assert any("LEGALE" in n for n in sezioni_nomi)
+    assert any("SSL" in n for n in sezioni_nomi)
+    # Visura nel batch flat e DVR nel batch nested entrambi presenti
+    visura_sez = next(s for s in result["sezioni"] if "LEGALE" in s["nome"])
+    assert any(d["tipo"] == "Visura Camerale" for d in visura_sez["documenti"])
+    dvr_sez = next(s for s in result["sezioni"] if "SSL" in s["nome"])
+    assert any(d["tipo"] == "DVR" for d in dvr_sez["documenti"])
+
+
+def test_score_visura_wins_over_dvr_only_batch():
+    """
+    Il batch con visura camerale deve vincere sul batch che ha SOLO DVR/attestati.
+    Replica del comportamento V1 (essenziale per non scegliere consulenti
+    esterni come "azienda audita").
+    """
+    yaml_dvr_only = """
+meta:
+  azienda:
+    nome: "STUDIO RSPP CONSULENZE SRL"
+sezioni:
+  - id: "10"
+    nome: "10 · SSL"
+    documenti:
+      - tipo: "DVR"
+        titolo: "DVR azienda cliente"
+"""
+    yaml_visura = """
+meta:
+  azienda:
+    nome: "AZIENDA REALE SPA"
+sezioni:
+  - id: "08"
+    nome: "08 · LEGALE"
+    documenti:
+      - tipo: "Visura camerale"
+        titolo: "Visura 2025"
+"""
+    # Aggrega con DVR primo (ordine non importa, deve vincere visura per score)
+    aggregated = yaml_dvr_only + "\n\n---\n\n" + yaml_visura
+    result = yp.parse_aggregated_yaml(aggregated)
+    # AZIENDA REALE vince (score +100 visura), STUDIO RSPP perde (score -50 DVR)
+    assert result["meta"]["azienda"]["nome"] == "AZIENDA REALE SPA"
+
+
+def test_score_visura_wins_when_first_batch():
+    """Stessa logica anche se la visura è nel primo batch."""
+    yaml_visura = """
+meta:
+  azienda:
+    nome: "MEDIL CONSORZIO SPA"
+sezioni:
+  - id: "08"
+    nome: "08 · LEGALE"
+    documenti:
+      - tipo: "Visura camerale"
+        titolo: "Visura"
+"""
+    yaml_attestato = """
+meta:
+  azienda:
+    nome: "ENTE FORMATORE SRL"
+sezioni:
+  - id: "04"
+    nome: "04 · FORMAZIONE"
+    documenti:
+      - tipo: "Attestato di formazione"
+        titolo: "Antincendio"
+"""
+    aggregated = yaml_visura + "\n\n---\n\n" + yaml_attestato
+    result = yp.parse_aggregated_yaml(aggregated)
+    assert result["meta"]["azienda"]["nome"] == "MEDIL CONSORZIO SPA"
+
+
+def test_score_function_directly():
+    """Test diretto della funzione di scoring."""
+    assert yp._score_company_source(["visura camerale"]) == 100
+    assert yp._score_company_source(["statuto"]) == 80
+    assert yp._score_company_source(["attestazione soa"]) == 60
+    assert yp._score_company_source(["fattura"]) == 30
+    assert yp._score_company_source(["dvr"]) == -50
+    assert yp._score_company_source(["attestato di formazione antincendio"]) == -50
+    # Combinato: visura batte tutto
+    assert yp._score_company_source(["visura camerale", "dvr"]) == 50  # 100 - 50
+    # Nessun match: 0
+    assert yp._score_company_source(["sconosciuto"]) == 0
+
+
 def test_recovery_markdown_table_with_bad_indent():
     """
     Recovery: il modello produce tabelle Markdown senza indentazione corretta.
