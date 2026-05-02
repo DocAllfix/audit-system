@@ -66,6 +66,21 @@ PRICING: Dict[str, Dict[str, Optional[float]]] = {
         "output": 0.0,
         "cached_input": None,
     },
+    # DeepSeek V4 Flash — usato dallo spike `webapp/spike_deepseek/`.
+    # Pricing ufficiale 2026/04/26 (cache hit ridotto a 1/10 del prezzo lancio).
+    # Ref: https://api-docs.deepseek.com/quick_start/pricing
+    "deepseek-v4-flash": {
+        "input": 0.14,
+        "output": 0.28,
+        "cached_input": 0.0028,  # 50× più economico di Gemini Flash cached
+    },
+    # DeepSeek V4 Pro — disponibile per spike futuri (qualità top, 1.6T params).
+    # Pricing scontato del 75% fino a 2026/05/31 (poi torna a $1.74/M out).
+    "deepseek-v4-pro": {
+        "input": 0.435,
+        "output": 0.87,
+        "cached_input": 0.003625,
+    },
 }
 
 
