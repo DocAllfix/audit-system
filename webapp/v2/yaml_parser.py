@@ -47,26 +47,149 @@ _INVALID_COMPANY_VALUES = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _strip_yaml_fences(text: str) -> str:
-    """Rimuove fences ```yaml ... ``` se presenti (alcuni modelli li aggiungono)."""
+    """
+    Rimuove fences ```yaml ... ``` se presenti (alcuni modelli li aggiungono).
+    Gestisce sia i fence di apertura/chiusura ai bordi sia quelli annidati
+    in mezzo al testo (modelli a volte mettono fence attorno a singole sezioni).
+    """
     if not text:
         return ""
     cleaned = text.strip()
-    # Rimuovi fence iniziale
-    cleaned = re.sub(r"^```(?:yaml)?\s*\n?", "", cleaned)
-    # Rimuovi fence finale
-    cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    # Rimuovi qualsiasi linea che è solo ``` o ```yaml (ovunque appaia)
+    cleaned = re.sub(
+        r"^```(?:yaml)?\s*$",
+        "",
+        cleaned,
+        flags=re.MULTILINE,
+    )
     return cleaned.strip()
 
 
 def _safe_load_yaml(text: str) -> Any:
-    """yaml.safe_load tollerante. Ritorna None se parsing fallisce."""
+    """
+    yaml.safe_load tollerante con auto-recovery su errori comuni:
+    1. Tentativo standard
+    2. Se fallisce per block-scalar mal indentato (tabelle Markdown
+       all'interno di campi YAML), tenta sanitization e riprova
+    3. Se ancora fallisce → None
+    """
     if not HAS_YAML or not text:
         return None
+    # Tentativo 1: standard
     try:
         return yaml.safe_load(text)
     except Exception as e:
-        print(f"[V2 YAML] safe_load fallito: {e}")
-        return None
+        first_err = e
+
+    # Tentativo 2: sanitize tabelle Markdown mal indentate
+    sanitized = _sanitize_markdown_tables_in_yaml(text)
+    if sanitized != text:
+        try:
+            return yaml.safe_load(sanitized)
+        except Exception:
+            pass
+
+    # Tentativo 3: rimuovi righe pipe problematiche (best effort)
+    stripped = _strip_problematic_pipe_lines(text)
+    if stripped != text:
+        try:
+            return yaml.safe_load(stripped)
+        except Exception:
+            pass
+
+    print(f"[V2 YAML] safe_load fallito definitivamente: {first_err}")
+    return None
+
+
+def _sanitize_markdown_tables_in_yaml(text: str) -> str:
+    """
+    Trova blocchi `key: |` o `key: >` seguiti da righe che iniziano con `|`
+    NON indentate rispetto alla key, e re-indenta le righe del block scalar.
+
+    Esempio fail (yaml lo rifiuta):
+        descrizione: |
+        | Codice | Desc |
+        | A001 | x |
+
+    Output (yaml lo accetta):
+        descrizione: |
+          | Codice | Desc |
+          | A001 | x |
+    """
+    lines = text.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+
+        # Cerca pattern "  key: |" o "  key: >" o "  key: |-"
+        m = re.match(r"^(\s*)([\w_\-]+)\s*:\s*[|>][-+]?\s*$", line)
+        if m:
+            base_indent = len(m.group(1))
+            target_indent = base_indent + 2
+            # Re-indenta le righe seguenti del block scalar
+            j = i + 1
+            while j < len(lines):
+                child = lines[j]
+                if not child.strip():
+                    out.append(child)
+                    j += 1
+                    continue
+                # Conta indent della riga
+                child_indent = len(child) - len(child.lstrip(" "))
+                if child_indent <= base_indent:
+                    # Fine block scalar (o riga mal indentata)
+                    if child.lstrip().startswith("|") and child_indent <= base_indent:
+                        # Tabella Markdown non indentata: re-indento
+                        out.append(" " * target_indent + child.lstrip())
+                        j += 1
+                        continue
+                    break
+                out.append(child)
+                j += 1
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+def _strip_problematic_pipe_lines(text: str) -> str:
+    """
+    Ultima chance: rimuove righe top-level che iniziano con `|` e che non sono
+    parte di un block scalar valido. Best effort: scarta info ma non rompe
+    il parsing.
+    """
+    lines = text.split("\n")
+    out = []
+    in_block_scalar = False
+    block_scalar_indent = 0
+    for line in lines:
+        # Block scalar marker
+        if re.match(r"^(\s*)[\w_\-]+\s*:\s*[|>][-+]?\s*$", line):
+            in_block_scalar = True
+            block_scalar_indent = len(line) - len(line.lstrip(" "))
+            out.append(line)
+            continue
+
+        if in_block_scalar:
+            stripped = line.lstrip(" ")
+            line_indent = len(line) - len(stripped)
+            if not stripped:
+                out.append(line)
+                continue
+            if line_indent <= block_scalar_indent:
+                in_block_scalar = False
+                # falltrough a check normale
+            else:
+                out.append(line)
+                continue
+
+        # Riga top-level che inizia con `|` → scarta (tabella Markdown stand-alone)
+        if line.lstrip().startswith("|") and not re.match(r"^\s+", line):
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _split_by_separator(text: str) -> List[str]:

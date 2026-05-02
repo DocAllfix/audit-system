@@ -199,6 +199,52 @@ sezioni: []
 # Parsing summary
 # ──────────────────────────────────────────────────────────────────────────────
 
+def test_recovery_markdown_table_with_bad_indent():
+    """
+    Recovery: il modello produce tabelle Markdown senza indentazione corretta.
+    Il parser ora deve sanificare e parsare comunque.
+    """
+    bad_yaml = """
+meta:
+  azienda:
+    nome: "RECOVERY SRL"
+
+sezioni:
+  - id: "08"
+    nome: "08 · DOCUMENTAZIONE LEGALE"
+    documenti:
+      - tipo: "Visura"
+        titolo: "Visura"
+        descrizione_estesa: |
+| Codice articolo | Descrizione | Quantita |
+| A001 | Pippo | 10 |
+| A002 | Pluto | 20 |
+"""
+    result = yp.parse_aggregated_yaml(bad_yaml)
+    # Il parsing deve riuscire (almeno parzialmente)
+    assert result["meta"]["azienda"]["nome"] == "RECOVERY SRL"
+    # Almeno la sezione viene preservata
+    assert len(result["sezioni"]) >= 1
+
+
+def test_recovery_orphan_pipe_lines_stripped():
+    """Linee pipe orfane (non in block scalar) vengono scartate gracefully."""
+    bad_yaml = """
+meta:
+  azienda:
+    nome: "ORPHAN SRL"
+sezioni:
+  - id: "10"
+    nome: "10 · SSL"
+    documenti:
+      - tipo: "DVR"
+        titolo: "DVR"
+| this | is | random | markdown |
+"""
+    result = yp.parse_aggregated_yaml(bad_yaml)
+    assert result["meta"]["azienda"]["nome"] == "ORPHAN SRL"
+
+
 def test_parsing_summary():
     aggregated = SAMPLE_BATCH_1 + "\n\n---\n\n" + SAMPLE_BATCH_2
     parsed = yp.parse_aggregated_yaml(aggregated)

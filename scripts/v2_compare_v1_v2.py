@@ -252,6 +252,11 @@ def run_v2(zip_bytes: bytes, api_key: str) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def print_comparison(v1: Dict[str, Any], v2: Dict[str, Any]) -> None:
+    # Forza UTF-8 sullo stdout per evitare UnicodeEncodeError su Windows cp1252
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
+    except Exception:
+        pass
     print("\n" + "=" * 70)
     print("CONFRONTO V1 vs V2")
     print("=" * 70)
@@ -286,7 +291,7 @@ def print_comparison(v1: Dict[str, Any], v2: Dict[str, Any]) -> None:
     width_label = 18
     width_col = 22
     print(f"{'Metrica':<{width_label}}{'V1':<{width_col}}{'V2':<{width_col}}{'Diff':<15}")
-    print("─" * (width_label + width_col * 2 + 15))
+    print("-" * (width_label + width_col * 2 + 15))
     for label, v1_val, v2_val in rows:
         diff = ""
         try:
@@ -355,9 +360,7 @@ def main() -> int:
     if not args.skip_v2:
         v2_result = run_v2(zip_bytes, api_key)
 
-    print_comparison(v1_result, v2_result)
-
-    # Salva JSON report
+    # Salva JSON PRIMA del print (se il print crasha per encoding, il report resta)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_path = _REPO_ROOT / "temp" / "comparison" / f"report_{timestamp}.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,8 +371,13 @@ def main() -> int:
         "v1": v1_result,
         "v2": v2_result,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nReport salvato: {report_path}")
 
+    try:
+        print_comparison(v1_result, v2_result)
+    except Exception as e:
+        print(f"\n[print fallito: {e}] - vedi report JSON")
+
+    print(f"\nReport salvato: {report_path}")
     return 0
 
 
