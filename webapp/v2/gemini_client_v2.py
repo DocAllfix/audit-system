@@ -99,8 +99,16 @@ def _build_user_prompt(
     batch_docs: List[Dict[str, Any]],
     batch_idx: int,
     total_docs: int,
+    compact_mode: bool = False,
 ) -> str:
-    """Costruisce il prompt utente con i documenti del batch."""
+    """Costruisce il prompt utente con i documenti del batch.
+
+    Quando compact_mode=True (Leva 2 Fase C, batch composti da file con
+    audit_role=AGGREGABLE), prepende una direttiva esplicita di compattezza
+    che richiama il tier MINIMO della "REGOLA DI PROPORZIONALITÀ
+    DELL'OUTPUT" già presente nel prompt universale. La regola 2.7
+    (1 file = 1 scheda) resta inderogabile.
+    """
     parts = []
     for i, d in enumerate(batch_docs):
         fname = d.get("filename", "sconosciuto")
@@ -109,7 +117,32 @@ def _build_user_prompt(
         parts.append(f"### DOCUMENTO {i + 1}: {fname}\n{content[:cap]}")
     docs_text = "\n\n".join(parts)
 
+    if compact_mode:
+        compact_directive = (
+            "## MODALITÀ COMPATTA (Tier MINIMO) — INDEROGABILE PER QUESTO BATCH\n"
+            "I documenti seguenti sono ricorrenti e ad evidenza collettiva "
+            "(es. attestati formazione standard, buste paga, comunicazioni "
+            "UniLav, fatture di routine). Applica il **Tier MINIMO** della "
+            "REGOLA DI PROPORZIONALITÀ DELL'OUTPUT:\n\n"
+            "- Per OGNI file produci 1 scheda compatta (Regola 2.7 inderogabile)\n"
+            "- Schema scheda: solo `tipo`, `titolo`, `data_doc`, "
+            "`intestatario_o_oggetto`, `numero_o_riferimento`, "
+            "`importo_o_durata` (se applicabile), `anomalia` (solo se osservi "
+            "un'irregolarità — altrimenti ometti il campo)\n"
+            "- Niente cluster liberi salvo dati strutturati non riducibili\n"
+            "- Lunghezza tipica indicativa: 40-150 token per scheda\n"
+            "- Se ci sono ≥3 documenti omogenei, produci PRIMA una tabella "
+            "Markdown riepilogativa (Regola 2.6, max 30 righe), POI le "
+            "schede compatte\n"
+            "- Se osservi un documento NON omogeneo agli altri (es. "
+            "attestato di figura critica RSPP/RLS/medico), ELEVA quel "
+            "documento al tier MEDIO o ESTESO secondo le regole standard\n\n"
+        )
+    else:
+        compact_directive = ""
+
     return (
+        f"{compact_directive}"
         f"## DOCUMENTI DA ELABORARE "
         f"({len(batch_docs)} file — Batch {batch_idx + 1}, "
         f"totale progetto {total_docs} doc)\n\n"
@@ -137,6 +170,7 @@ def analyze_batch_streaming(
     max_chars: int = DEFAULT_MAX_CHARS,
     enable_retry: bool = True,
     meter_session_id: Optional[str] = None,
+    compact_mode: bool = False,
 ) -> StreamResult:
     """
     Analizza un batch di documenti via streaming Gemini.
@@ -178,7 +212,9 @@ def analyze_batch_streaming(
                 pass
 
     buf = StreamBuffer(max_chars=max_chars, on_chunk=buffer_on_chunk)
-    user_prompt = _build_user_prompt(batch_docs, batch_idx, total_docs)
+    user_prompt = _build_user_prompt(
+        batch_docs, batch_idx, total_docs, compact_mode=compact_mode,
+    )
     user_prompt = _sanitize_text(user_prompt)
 
     last_error: Optional[str] = None

@@ -94,6 +94,42 @@ def test_build_user_prompt_respects_doc_cap():
     assert x_count == 25000
 
 
+def test_build_user_prompt_compact_mode_off_by_default():
+    """Senza compact_mode, niente direttiva 'MODALITÀ COMPATTA' nel prompt."""
+    docs = [{"filename": "doc.pdf", "content": "x"}]
+    prompt = gc2._build_user_prompt(docs, batch_idx=0, total_docs=1)
+    assert "MODALITÀ COMPATTA" not in prompt
+    assert "Tier MINIMO" not in prompt
+
+
+def test_build_user_prompt_compact_mode_on_adds_directive():
+    """Con compact_mode=True, la direttiva tier MINIMO è prepended."""
+    docs = [
+        {"filename": "Attestato_1.pdf", "content": "x"},
+        {"filename": "Attestato_2.pdf", "content": "y"},
+    ]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=2, compact_mode=True,
+    )
+    assert "MODALITÀ COMPATTA" in prompt
+    assert "Tier MINIMO" in prompt
+    # Regola 2.7 inderogabile sempre richiamata
+    assert "Regola 2.7" in prompt
+    # I documenti restano nel prompt (1 file = 1 scheda)
+    assert "Attestato_1.pdf" in prompt
+    assert "Attestato_2.pdf" in prompt
+
+
+def test_build_user_prompt_compact_mode_mentions_aggregation_table():
+    """compact_mode richiama la Regola 2.6 per ≥3 documenti omogenei."""
+    docs = [{"filename": f"a_{i}.pdf", "content": "x"} for i in range(3)]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=3, compact_mode=True,
+    )
+    assert "Regola 2.6" in prompt
+    assert "tabella" in prompt.lower()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Mock streaming helpers
 # ──────────────────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -449,17 +449,79 @@ def process_zip_v2(
         from v2.gemini_client_v2 import analyze_batch_streaming
 
         cached_id = get_cached_prompt(client)
-        batches = _create_smart_batches(documents, max_files=4, max_chars=50_000)
+
+        # Leva 2 Fase C: separa i documenti in 2 pool basati sull'audit_role
+        # quando il flag V2_LEVA2_AGGREGABLE_COMPACT è attivo. I file
+        # AGGREGABLE vanno in un pool dedicato analizzato con compact_mode=True.
+        # I file CORE/SUPPORT vanno nel pool standard.
+        aggregable_compact_enabled = (
+            os.environ.get("V2_LEVA2_AGGREGABLE_COMPACT", "false").lower() == "true"
+            and bool(classified)
+        )
+        role_by_filename: Dict[str, str] = {}
+        if aggregable_compact_enabled:
+            from v2.schemas.classification import (
+                DocumentClass,
+                default_audit_role_for,
+            )
+            for cf in classified:
+                if cf.filename in skipped_filenames:
+                    continue
+                role = cf.audit_role
+                if role is None:
+                    try:
+                        classe_str = cf.classe if isinstance(cf.classe, str) else cf.classe.value
+                        role = default_audit_role_for(DocumentClass(classe_str)).value
+                    except Exception:
+                        role = "SUPPORT"
+                role_str = role if isinstance(role, str) else role.value
+                role_by_filename[cf.filename] = role_str
+
+        documents_standard: List[Dict[str, Any]] = []
+        documents_aggregable: List[Dict[str, Any]] = []
+        if aggregable_compact_enabled:
+            for d in documents:
+                if role_by_filename.get(d["filename"]) == "AGGREGABLE":
+                    documents_aggregable.append(d)
+                else:
+                    documents_standard.append(d)
+        else:
+            documents_standard = documents
+
+        batches_standard = _create_smart_batches(
+            documents_standard, max_files=4, max_chars=50_000,
+        )
+        # Per gli aggregable un batch più grande è sensato: l'output è
+        # piccolo per file e si avvantaggia della tabella riepilogativa
+        # Regola 2.6 (≥3 documenti omogenei).
+        batches_aggregable = (
+            _create_smart_batches(documents_aggregable, max_files=8, max_chars=50_000)
+            if documents_aggregable
+            else []
+        )
+
+        # Lista finale di tutti i batch con flag compact_mode per ciascuno
+        all_batches: List[Tuple[List[Dict[str, Any]], bool]] = (
+            [(b, False) for b in batches_standard]
+            + [(b, True) for b in batches_aggregable]
+        )
+
+        if aggregable_compact_enabled and documents_aggregable:
+            print(
+                f"[V2 PIPELINE] Leva 2 Fase C: split in "
+                f"{len(batches_standard)} batch standard + "
+                f"{len(batches_aggregable)} batch aggregable (compact)"
+            )
 
         phase_start = time.monotonic()
-        emitter.emit_phase_start(PipelinePhase.ANALYZE, total_items=len(batches))
+        emitter.emit_phase_start(PipelinePhase.ANALYZE, total_items=len(all_batches))
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_workers = min(7, len(batches))
+        max_workers = min(7, max(1, len(all_batches)))
         completed = 0
         results_by_idx: Dict[int, str] = {}
 
-        def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]]):
+        def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]], compact: bool):
             result = analyze_batch_streaming(
                 client=client,
                 batch_docs=batch_docs,
@@ -467,13 +529,14 @@ def process_zip_v2(
                 total_docs=len(documents),
                 cached_content_id=cached_id,
                 meter_session_id=session_id,
+                compact_mode=compact,
             )
             return idx, result
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(_analyze_one, i, b): i
-                for i, b in enumerate(batches)
+                pool.submit(_analyze_one, i, b, c): i
+                for i, (b, c) in enumerate(all_batches)
             }
             for fut in as_completed(futures):
                 try:
@@ -485,8 +548,8 @@ def process_zip_v2(
                 completed += 1
                 emitter.emit_phase_tick(
                     PipelinePhase.ANALYZE,
-                    pct=completed / max(len(batches), 1),
-                    detail={"completed": completed, "total": len(batches)},
+                    pct=completed / max(len(all_batches), 1),
+                    detail={"completed": completed, "total": len(all_batches)},
                 )
 
         # Mantieni ordine batch
@@ -495,7 +558,12 @@ def process_zip_v2(
         emitter.emit_phase_end(
             PipelinePhase.ANALYZE,
             duration_seconds=round(time.monotonic() - phase_start, 2),
-            metrics={"batches_total": len(batches), "batches_ok": len(raw_yamls)},
+            metrics={
+                "batches_total": len(all_batches),
+                "batches_ok": len(raw_yamls),
+                "batches_standard": len(batches_standard),
+                "batches_aggregable_compact": len(batches_aggregable),
+            },
         )
 
     if not raw_yamls:
