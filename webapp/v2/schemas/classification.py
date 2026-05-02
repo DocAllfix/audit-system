@@ -111,6 +111,58 @@ class LinguaDocumento(str, Enum):
     ALTRA = "ALTRA"
 
 
+class AuditRole(str, Enum):
+    """
+    Ruolo del documento nella catena evidenziale audit (Leva 2 — Fase A).
+
+    Tassonomia ortogonale a `DocumentClass`: la classe dice CHE COS'È, il role
+    dice QUANTO PESA come evidenza.
+
+    - CORE: documento la cui analisi atomica è evidenza unica di una clausola
+      di norma. Visure, DVR, statuti, SOA, certificati ISO, bilanci ESG,
+      mansionari, giudizi medico competente, registri infortuni/NC, contratti
+      principali. Mai scartabile, sempre tier ESTESO.
+    - AGGREGABLE: documento ricorrente la cui evidenza è collettiva (vale
+      "tutti insieme"). Attestati formazione standard, buste paga, UniLav,
+      fatture di routine. Si aggrega con tabella riepilogativa + scheda
+      compatta per file.
+    - SUPPORT: documento di supporto/contesto, non evidenza diretta.
+      Questionari autovalutazione, schede fornitore, riepiloghi, ricevute.
+      Tier MEDIO con prompt minimal possibile.
+    - NOISE: provata duplicazione, file vuoto, comunicazione email banale,
+      ricevuta isolata fuori contesto. Candidato allo skip ma SOLO con
+      confidence ≥ 0.90 + safety net (whitelist normativa, volume cap).
+    """
+
+    CORE = "CORE"
+    AGGREGABLE = "AGGREGABLE"
+    SUPPORT = "SUPPORT"
+    NOISE = "NOISE"
+
+
+_VALID_AUDIT_ROLE_VALUES = {r.value for r in AuditRole}
+
+
+# Mapping default classe → audit_role (fallback deterministico se il
+# classifier non popola il campo). I valori MAI vengono usati per scartare:
+# servono solo per dare un default conservativo.
+CLASS_TO_DEFAULT_ROLE = {
+    DocumentClass.VISURA: AuditRole.CORE,
+    DocumentClass.STATUTO: AuditRole.CORE,
+    DocumentClass.DVR: AuditRole.CORE,
+    DocumentClass.POS: AuditRole.CORE,
+    DocumentClass.BILANCIO: AuditRole.CORE,
+    DocumentClass.SOA: AuditRole.CORE,
+    DocumentClass.CERTIFICATO_ISO: AuditRole.CORE,
+    DocumentClass.CONTRATTO: AuditRole.CORE,
+    DocumentClass.CCNL: AuditRole.CORE,
+    DocumentClass.ATTESTATO: AuditRole.AGGREGABLE,
+    DocumentClass.FATTURA: AuditRole.AGGREGABLE,
+    DocumentClass.IDENTITA: AuditRole.SUPPORT,
+    DocumentClass.ALTRO: AuditRole.SUPPORT,
+}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) OUTPUT MODEL — singolo file classificato
 # ──────────────────────────────────────────────────────────────────────────────
@@ -154,6 +206,36 @@ class ClassifiedFile(BaseModel):
         default=False,
         description="True se classificato senza testo OCR (solo filename)",
     )
+    audit_role: Optional[AuditRole] = Field(
+        default=None,
+        description=(
+            "Ruolo del documento come evidenza audit (CORE/AGGREGABLE/"
+            "SUPPORT/NOISE). Se None, viene derivato deterministicamente "
+            "dalla classe via CLASS_TO_DEFAULT_ROLE."
+        ),
+    )
+    audit_role_confidence: Optional[float] = Field(
+        default=None,
+        ge=0.0, le=1.0,
+        description=(
+            "Confidenza del classifier sull'audit_role assegnato. Solo "
+            "≥ 0.90 abilita lo skip per role=NOISE (Fase B)."
+        ),
+    )
+
+    @field_validator("audit_role", mode="before")
+    @classmethod
+    def _normalize_audit_role(cls, v):
+        """Mappa role sconosciuti a None (verrà poi derivato dalla classe)."""
+        if v is None:
+            return None
+        if isinstance(v, AuditRole):
+            return v
+        if isinstance(v, str):
+            v_up = v.strip().upper()
+            if v_up in _VALID_AUDIT_ROLE_VALUES:
+                return v_up
+        return None
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -210,9 +292,14 @@ def char_cap_for(classe: DocumentClass) -> int:
     return CLASS_TO_CHAR_CAP.get(classe, 12_000)
 
 
+def default_audit_role_for(classe: DocumentClass) -> AuditRole:
+    """Ritorna l'audit_role di default per una classe (fallback deterministico)."""
+    return CLASS_TO_DEFAULT_ROLE.get(classe, AuditRole.SUPPORT)
+
+
 def enrich_with_derived_fields(cf: ClassifiedFile) -> ClassifiedFile:
     """
-    Popola macroarea e char_cap_suggested se mancanti.
+    Popola macroarea, char_cap_suggested e audit_role se mancanti.
     Restituisce nuova istanza (non muta).
     """
     classe_enum = DocumentClass(cf.classe) if isinstance(cf.classe, str) else cf.classe
@@ -221,4 +308,6 @@ def enrich_with_derived_fields(cf: ClassifiedFile) -> ClassifiedFile:
         data["macroarea"] = macroarea_for(classe_enum)
     if not data.get("char_cap_suggested"):
         data["char_cap_suggested"] = char_cap_for(classe_enum)
+    if not data.get("audit_role"):
+        data["audit_role"] = default_audit_role_for(classe_enum).value
     return ClassifiedFile(**data)

@@ -105,6 +105,74 @@ sezioni:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Leva 2 — dry-run audit_role persistence
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _persist_audit_role_dryrun(
+    session_id: str,
+    classified: List[Any],
+    classify_metrics: Dict[str, Any],
+) -> None:
+    """
+    Persiste in `temp/audit_role_dryrun/{session_id}.json` la distribuzione
+    audit_role del classifier + l'elenco dei candidati NOISE con i loro
+    metadati. Non altera alcun comportamento del pipeline (Fase A è solo
+    osservazione).
+    """
+    import json as _json
+
+    base_dir = Path(__file__).resolve().parent.parent.parent / "temp" / "audit_role_dryrun"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    candidates_noise: List[Dict[str, Any]] = []
+    candidates_aggregable: List[Dict[str, Any]] = []
+    candidates_support: List[Dict[str, Any]] = []
+    role_with_low_arc: List[Dict[str, Any]] = []
+    for cf in classified:
+        try:
+            classe_str = cf.classe if isinstance(cf.classe, str) else cf.classe.value
+            role = cf.audit_role
+            if role is None:
+                from v2.schemas.classification import (
+                    DocumentClass,
+                    default_audit_role_for,
+                )
+                role = default_audit_role_for(DocumentClass(classe_str)).value
+            role_str = role if isinstance(role, str) else role.value
+            arc = cf.audit_role_confidence
+            entry = {
+                "filename": cf.filename,
+                "classe": classe_str,
+                "audit_role": role_str,
+                "audit_role_confidence": arc,
+                "confidence": cf.confidence,
+            }
+            if role_str == "NOISE":
+                candidates_noise.append(entry)
+                if arc is None or arc < 0.90:
+                    role_with_low_arc.append(entry)
+            elif role_str == "AGGREGABLE":
+                candidates_aggregable.append(entry)
+            elif role_str == "SUPPORT":
+                candidates_support.append(entry)
+        except Exception:
+            continue
+
+    payload = {
+        "session_id": session_id,
+        "summary": classify_metrics,
+        "noise_candidates": candidates_noise,
+        "aggregable_candidates": candidates_aggregable,
+        "support_candidates": candidates_support,
+        "noise_with_low_audit_role_confidence": role_with_low_arc,
+    }
+    out = base_dir / f"{session_id}.json"
+    tmp = out.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, out)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Pipeline orchestrator
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -257,11 +325,20 @@ def process_zip_v2(
         except Exception as e:
             emitter.emit_error(ErrorKind.UNKNOWN, f"classifier_error: {e}")
             classified = []
+        classify_metrics = classifier_summary(classified) if classified else {}
         emitter.emit_phase_end(
             PipelinePhase.CLASSIFY,
             duration_seconds=round(time.monotonic() - phase_start, 2),
-            metrics=classifier_summary(classified) if classified else {},
+            metrics=classify_metrics,
         )
+
+        # Leva 2 — Fase A (dry-run audit_role): persisti la distribuzione e
+        # i candidati NOISE per ispezione successiva. NIENTE filtraggio attivo.
+        if classified:
+            try:
+                _persist_audit_role_dryrun(session_id, classified, classify_metrics)
+            except Exception as e:
+                print(f"[V2 PIPELINE] dry-run audit_role persist fallito: {e}")
 
     # ── FASE: OCR (Fase 4) ───────────────────────────────────────────────
     needs_ocr_files = triaged.get("needs_ocr", [])

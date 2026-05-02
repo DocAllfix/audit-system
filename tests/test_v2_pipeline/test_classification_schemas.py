@@ -173,6 +173,88 @@ def test_batch_output_validates_inner_models():
     assert batch.files[2].confidence == 1.0
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Leva 2 — audit_role (dry-run)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_audit_role_field_optional_default_none():
+    """audit_role default None: viene derivato lazy nel summary/enrich."""
+    cf = ClassifiedFile(filename="x.pdf", classe=DocumentClass.DVR, confidence=0.9)
+    assert cf.audit_role is None
+    assert cf.audit_role_confidence is None
+
+
+def test_audit_role_normalization_unknown_value():
+    """Valore audit_role sconosciuto → None (sarà derivato)."""
+    cf = ClassifiedFile(
+        filename="x.pdf", classe=DocumentClass.DVR, confidence=0.9,
+        audit_role="MAYBE_IMPORTANT",
+    )
+    assert cf.audit_role is None
+
+
+def test_audit_role_accepts_valid_values():
+    """I 4 valori validi vengono accettati."""
+    for role_value in ("CORE", "AGGREGABLE", "SUPPORT", "NOISE"):
+        cf = ClassifiedFile(
+            filename="x.pdf", classe=DocumentClass.DVR, confidence=0.9,
+            audit_role=role_value,
+        )
+        assert cf.audit_role == role_value
+
+
+def test_audit_role_confidence_clamp():
+    """audit_role_confidence rispetta il range [0, 1]."""
+    import pytest
+    with pytest.raises(Exception):
+        ClassifiedFile(
+            filename="x.pdf", classe=DocumentClass.DVR, confidence=0.9,
+            audit_role="NOISE", audit_role_confidence=1.5,
+        )
+
+
+def test_default_audit_role_for_core_classes():
+    """Le classi CORE devono avere default CORE."""
+    from v2.schemas.classification import default_audit_role_for, AuditRole
+    for c in (DocumentClass.VISURA, DocumentClass.STATUTO, DocumentClass.DVR,
+              DocumentClass.POS, DocumentClass.BILANCIO, DocumentClass.SOA,
+              DocumentClass.CERTIFICATO_ISO, DocumentClass.CONTRATTO,
+              DocumentClass.CCNL):
+        assert default_audit_role_for(c) == AuditRole.CORE
+
+
+def test_default_audit_role_for_aggregable_classes():
+    """ATTESTATO e FATTURA sono AGGREGABLE per default."""
+    from v2.schemas.classification import default_audit_role_for, AuditRole
+    assert default_audit_role_for(DocumentClass.ATTESTATO) == AuditRole.AGGREGABLE
+    assert default_audit_role_for(DocumentClass.FATTURA) == AuditRole.AGGREGABLE
+
+
+def test_default_audit_role_for_support_classes():
+    """IDENTITA e ALTRO sono SUPPORT per default."""
+    from v2.schemas.classification import default_audit_role_for, AuditRole
+    assert default_audit_role_for(DocumentClass.IDENTITA) == AuditRole.SUPPORT
+    assert default_audit_role_for(DocumentClass.ALTRO) == AuditRole.SUPPORT
+
+
+def test_enrich_populates_audit_role_when_missing():
+    """enrich popola audit_role se mancante con default deterministico."""
+    cf = ClassifiedFile(filename="d.pdf", classe=DocumentClass.DVR, confidence=0.95)
+    enriched = enrich_with_derived_fields(cf)
+    assert enriched.audit_role == "CORE"
+
+
+def test_enrich_preserves_existing_audit_role():
+    """enrich NON sovrascrive un audit_role esplicito (anche controintuitivo)."""
+    cf = ClassifiedFile(
+        filename="d.pdf", classe=DocumentClass.DVR, confidence=0.95,
+        audit_role="SUPPORT",  # caso forzato non standard
+    )
+    enriched = enrich_with_derived_fields(cf)
+    # Mantiene il valore impostato esplicitamente: l'override è del classifier
+    assert enriched.audit_role == "SUPPORT"
+
+
 def test_batch_output_from_json_string():
     """ClassificationBatchOutput.model_validate_json parsa output Gemini."""
     json_str = """{
