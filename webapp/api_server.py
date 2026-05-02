@@ -600,6 +600,7 @@ async def v2_health():
 async def v2_process_report(
     file: UploadFile = File(...),
     dry_run: bool = False,
+    legacy_events: bool = False,
     user: Dict = Depends(_get_current_user),
 ):
     """
@@ -607,6 +608,8 @@ async def v2_process_report(
 
     Query params:
         dry_run=true → nessuna chiamata Gemini (testing senza consumare token)
+        legacy_events=true → eventi tradotti in formato V1 `{pct, msg}`
+                              per compatibilità con frontend V1 esistente
 
     Body: multipart/form-data con `file` ZIP.
 
@@ -614,7 +617,9 @@ async def v2_process_report(
 
     Stream eventi SSE typed (vedi v2/schemas/events.py): session.start, phase.*,
     file.*, llm.token, error, heartbeat, done.
+    Con legacy_events=true: i suddetti vengono tradotti in formato V1.
     """
+    from v2.legacy_adapter import LegacyAdapter
     from v2.pipeline import process_zip_v2
     from v2.progress_store import ProgressStore
     from v2.schemas.events import PipelinePhase
@@ -643,10 +648,20 @@ async def v2_process_report(
 
     store = ProgressStore(session_id)
     emitter = SSEEmitter(session_id=session_id, store=store, queue=queue, loop=loop)
+    legacy_adapter = LegacyAdapter() if legacy_events else None
 
     # Watchdog per heartbeat ogni 5s
     wd = HeartbeatWatchdog(emitter, interval_seconds=5.0,
                             get_queue_depth=lambda: queue.qsize())
+
+    def _serialize_event(event_dict):
+        """Serializza evento. Se legacy_events: traduce in formato V1."""
+        if legacy_adapter is None:
+            return SSEEmitter.serialize_for_sse(event_dict)
+        translated = legacy_adapter.translate(event_dict)
+        if translated is None:
+            return None  # evento V2 senza equivalente V1 (es. heartbeat)
+        return SSEEmitter.serialize_for_sse(translated)
 
     async def event_stream():
         # Evento iniziale
@@ -683,7 +698,7 @@ async def v2_process_report(
             while not future.done():
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    line = SSEEmitter.serialize_for_sse(event)
+                    line = _serialize_event(event)
                     if line:
                         yield line
                 except asyncio.TimeoutError:
@@ -692,7 +707,7 @@ async def v2_process_report(
             # Svuota eventi residui
             while not queue.empty():
                 event = queue.get_nowait()
-                line = SSEEmitter.serialize_for_sse(event)
+                line = _serialize_event(event)
                 if line:
                     yield line
 

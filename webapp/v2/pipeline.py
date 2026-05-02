@@ -215,11 +215,27 @@ def process_zip_v2(
         metrics=triage_sum,
     )
 
+    # ── FASE: estrazione testo non-PDF (Limitazione 1) ──────────────────
+    # Per file docx/xlsx/txt/etc., estraggo testo qui prima del classifier
+    from v2.text_handlers import extract_text_for_category
+    non_pdf_files = triaged.get("non_pdf", [])
+    non_pdf_with_text: List[Dict[str, Any]] = []
+    for f in non_pdf_files:
+        text, method = extract_text_for_category(f)
+        if text and len(text.strip()) >= 10:
+            f["extracted_text"] = text
+            f["extraction_method"] = method
+            non_pdf_with_text.append(f)
+        else:
+            # Niente testo estraibile → resta "non_pdf" senza contenuto
+            f["extraction_method"] = method or "unsupported_format"
+
     # ── FASE: classify (Fase 2) ──────────────────────────────────────────
     # Tutti i file con o senza testo (anche pre-OCR) vengono classificati
     files_for_classify = (
         triaged.get("native_text", [])
         + triaged.get("needs_ocr", [])
+        + non_pdf_with_text
     )
 
     classified: List = []
@@ -274,9 +290,10 @@ def process_zip_v2(
         )
 
     # ── Costruisci documents finali per analyze ─────────────────────────
-    # Includiamo tutti i file con extracted_text non vuoto (PDF nativi + OCR)
+    # Includiamo tutti i file con extracted_text non vuoto:
+    # PDF nativi + OCR PDF + non-PDF (Word, Excel, ecc.)
     documents = []
-    for f in (triaged.get("native_text", []) + needs_ocr_files):
+    for f in (triaged.get("native_text", []) + needs_ocr_files + non_pdf_with_text):
         text = (f.get("extracted_text") or "").strip()
         if text:
             documents.append({
