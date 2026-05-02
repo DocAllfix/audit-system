@@ -61,6 +61,20 @@ def _sanitize(text: str) -> str:
     return text
 
 
+def _safe_log(prefix: str, path: str, err) -> None:
+    """
+    Print encoding-safe: alcuni filename possono contenere caratteri
+    invalidi (\\ufffd) che crashano print() su stdout cp1252 di Windows.
+    """
+    try:
+        msg = f"{prefix} {os.path.basename(path)}: {err}"
+        # Forza ASCII-only per stdout sicuro su Windows console
+        safe = msg.encode("ascii", errors="replace").decode("ascii")
+        print(safe)
+    except Exception:
+        pass  # Logging non deve mai propagare errori
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # DOCX (python-docx)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -86,7 +100,7 @@ def extract_docx(path: str) -> Tuple[str, str]:
         text = "\n".join(parts)
         return _sanitize(text), METHOD_DOCX_OK
     except Exception as e:
-        print(f"[V2 DOCX] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 DOCX]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -123,7 +137,7 @@ def extract_doc_legacy(path: str) -> Tuple[str, str]:
         finally:
             ole.close()
     except Exception as e:
-        print(f"[V2 DOC] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 DOC]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -149,7 +163,7 @@ def extract_xlsx(path: str) -> Tuple[str, str]:
         wb.close()
         return _sanitize("\n".join(parts)), METHOD_XLSX_OK
     except Exception as e:
-        print(f"[V2 XLSX] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 XLSX]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -174,7 +188,7 @@ def extract_xls(path: str) -> Tuple[str, str]:
                     parts.append(" | ".join(cells))
         return _sanitize("\n".join(parts)), METHOD_XLS_OK
     except Exception as e:
-        print(f"[V2 XLS] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 XLS]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -193,7 +207,7 @@ def extract_txt(path: str) -> Tuple[str, str]:
                 text = f.read()
         return _sanitize(text), METHOD_TXT_OK
     except Exception as e:
-        print(f"[V2 TXT] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 TXT]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -212,7 +226,7 @@ def extract_rtf(path: str) -> Tuple[str, str]:
         text = rtf_to_text(raw)
         return _sanitize(text), METHOD_RTF_OK
     except Exception as e:
-        print(f"[V2 RTF] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 RTF]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -235,7 +249,7 @@ def extract_html(path: str) -> Tuple[str, str]:
         text = soup.get_text(separator="\n", strip=True)
         return _sanitize(text), METHOD_HTML_OK
     except Exception as e:
-        print(f"[V2 HTML] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 HTML]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -260,7 +274,7 @@ def extract_xml(path: str) -> Tuple[str, str]:
                 parts.append(elem.tail.strip())
         return _sanitize("\n".join(parts)), METHOD_XML_OK
     except Exception as e:
-        print(f"[V2 XML] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 XML]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -299,7 +313,7 @@ def extract_eml(path: str) -> Tuple[str, str]:
                 parts.append(content)
         return _sanitize("\n".join(parts)), METHOD_EML_OK
     except Exception as e:
-        print(f"[V2 EML] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 EML]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -329,7 +343,7 @@ def extract_msg(path: str) -> Tuple[str, str]:
         msg.close()
         return _sanitize("\n".join(parts)), METHOD_MSG_OK
     except Exception as e:
-        print(f"[V2 MSG] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 MSG]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -348,7 +362,7 @@ def extract_odt(path: str) -> Tuple[str, str]:
         text = teletype.extractText(doc.text)
         return _sanitize(text), METHOD_ODT_OK
     except Exception as e:
-        print(f"[V2 ODT] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 ODT]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -373,7 +387,7 @@ def extract_ods(path: str) -> Tuple[str, str]:
                     parts.append(" | ".join(cells))
         return _sanitize("\n".join(parts)), METHOD_ODS_OK
     except Exception as e:
-        print(f"[V2 ODS] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 ODS]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -399,7 +413,7 @@ def extract_pptx(path: str) -> Tuple[str, str]:
                             parts.append(line)
         return _sanitize("\n".join(parts)), METHOD_PPTX_OK
     except Exception as e:
-        print(f"[V2 PPTX] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 PPTX]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
@@ -460,7 +474,7 @@ def extract_p7m(path: str) -> Tuple[str, str]:
 
         return "", METHOD_FAILED_GENERIC
     except Exception as e:
-        print(f"[V2 P7M] {os.path.basename(path)}: {e}")
+        _safe_log("[V2 P7M]", path, e)
         return "", METHOD_FAILED_GENERIC
 
 
