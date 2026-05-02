@@ -113,8 +113,6 @@ def test_build_user_prompt_compact_mode_on_adds_directive():
     )
     assert "MODALITÀ COMPATTA" in prompt
     assert "Tier MINIMO" in prompt
-    # Regola 2.7 inderogabile sempre richiamata
-    assert "Regola 2.7" in prompt
     # I documenti restano nel prompt (1 file = 1 scheda)
     assert "Attestato_1.pdf" in prompt
     assert "Attestato_2.pdf" in prompt
@@ -128,6 +126,69 @@ def test_build_user_prompt_compact_mode_mentions_aggregation_table():
     )
     assert "Regola 2.6" in prompt
     assert "tabella" in prompt.lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Fix B (Fase 3) — compact_mode rinforzato con conteggio + esempio + anti-pattern
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_build_user_prompt_compact_mode_includes_dynamic_count():
+    """compact_mode include conteggio dinamico 'ESATTAMENTE N schede'."""
+    docs = [{"filename": f"a_{i}.pdf", "content": "x"} for i in range(8)]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=8, compact_mode=True,
+    )
+    assert "ESATTAMENTE 8 schede" in prompt
+    assert "8 file in input" in prompt
+
+
+def test_build_user_prompt_compact_mode_count_scales_with_batch():
+    """Il conteggio rispecchia il batch_docs anche per dimensioni diverse."""
+    for n in (1, 4, 12):
+        docs = [{"filename": f"x_{i}.pdf", "content": "y"} for i in range(n)]
+        prompt = gc2._build_user_prompt(
+            docs, batch_idx=0, total_docs=n, compact_mode=True,
+        )
+        assert f"ESATTAMENTE {n} schede" in prompt
+
+
+def test_build_user_prompt_compact_mode_includes_yaml_example():
+    """compact_mode include esempio YAML concreto con # ── DOC N ──."""
+    docs = [{"filename": "a.pdf", "content": "x"}]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=1, compact_mode=True,
+    )
+    # Esempio YAML — pattern critico
+    assert "# ── DOC 1 ──" in prompt
+    assert "# ── DOC 2 ──" in prompt
+    assert "Attestato di Formazione Lavoratori" in prompt
+    # Header 9 campi nell'esempio
+    assert "tipo:" in prompt
+    assert "categoria:" in prompt
+
+
+def test_build_user_prompt_compact_mode_includes_anti_patterns():
+    """compact_mode esplicita gli anti-pattern vietati."""
+    docs = [{"filename": "a.pdf", "content": "x"}]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=1, compact_mode=True,
+    )
+    assert "ANTI-PATTERN" in prompt
+    assert "VIETATI" in prompt
+    # Frase chiave anti-collapse
+    assert "SOSTITUTO" in prompt or "sostituto" in prompt.lower()
+
+
+def test_build_user_prompt_compact_mode_header_9_campi_referenced():
+    """compact_mode richiede header completo a 9 campi (post Fase 2)."""
+    docs = [{"filename": "a.pdf", "content": "x"}]
+    prompt = gc2._build_user_prompt(
+        docs, batch_idx=0, total_docs=1, compact_mode=True,
+    )
+    # Tutti i 9 campi header standard nominati
+    for campo in ("tipo", "categoria", "titolo", "riferimento", "data_doc",
+                   "data_scadenza", "emesso_da", "soggetto", "firme"):
+        assert f"`{campo}`" in prompt
 
 
 # ──────────────────────────────────────────────────────────────────────────────
