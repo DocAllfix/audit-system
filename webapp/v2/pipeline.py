@@ -500,17 +500,28 @@ def process_zip_v2(
             else []
         )
 
-        # Lista finale di tutti i batch con flag compact_mode per ciascuno
-        all_batches: List[Tuple[List[Dict[str, Any]], bool]] = (
-            [(b, False) for b in batches_standard]
-            + [(b, True) for b in batches_aggregable]
+        # Leva 4: model mix. Quando attivo, batch aggregable usano flash-lite
+        # (10× meno costoso). MAI applicato a CORE/SUPPORT.
+        model_mix_enabled = (
+            os.environ.get("V2_LEVA4_MODEL_MIX", "false").lower() == "true"
+        )
+        from v2.gemini_client_v2 import ANALYZE_MODEL_LITE
+        lite_model_for_aggregable = (
+            ANALYZE_MODEL_LITE if model_mix_enabled else None
+        )
+
+        # Lista finale di tutti i batch con (compact_mode, model_override)
+        all_batches: List[Tuple[List[Dict[str, Any]], bool, Optional[str]]] = (
+            [(b, False, None) for b in batches_standard]
+            + [(b, True, lite_model_for_aggregable) for b in batches_aggregable]
         )
 
         if aggregable_compact_enabled and documents_aggregable:
             print(
                 f"[V2 PIPELINE] Leva 2 Fase C: split in "
                 f"{len(batches_standard)} batch standard + "
-                f"{len(batches_aggregable)} batch aggregable (compact)"
+                f"{len(batches_aggregable)} batch aggregable "
+                f"(compact, model={lite_model_for_aggregable or 'flash'})"
             )
 
         phase_start = time.monotonic()
@@ -521,7 +532,8 @@ def process_zip_v2(
         completed = 0
         results_by_idx: Dict[int, str] = {}
 
-        def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]], compact: bool):
+        def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]],
+                          compact: bool, model_override: Optional[str]):
             result = analyze_batch_streaming(
                 client=client,
                 batch_docs=batch_docs,
@@ -530,13 +542,14 @@ def process_zip_v2(
                 cached_content_id=cached_id,
                 meter_session_id=session_id,
                 compact_mode=compact,
+                model_override=model_override,
             )
             return idx, result
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(_analyze_one, i, b, c): i
-                for i, (b, c) in enumerate(all_batches)
+                pool.submit(_analyze_one, i, b, c, m): i
+                for i, (b, c, m) in enumerate(all_batches)
             }
             for fut in as_completed(futures):
                 try:
@@ -563,6 +576,7 @@ def process_zip_v2(
                 "batches_ok": len(raw_yamls),
                 "batches_standard": len(batches_standard),
                 "batches_aggregable_compact": len(batches_aggregable),
+                "model_mix_active": model_mix_enabled,
             },
         )
 

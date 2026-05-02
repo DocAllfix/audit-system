@@ -131,6 +131,18 @@ def test_build_user_prompt_compact_mode_mentions_aggregation_table():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Leva 4 — model mix
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_constants_define_lite_model_and_cache_capability_set():
+    """ANALYZE_MODEL_LITE esiste e _MODELS_WITH_CACHE è coerente."""
+    assert gc2.ANALYZE_MODEL_LITE == "gemini-2.5-flash-lite"
+    assert "gemini-2.5-flash" in gc2._MODELS_WITH_CACHE
+    # Lite NON supporta caching
+    assert "gemini-2.5-flash-lite" not in gc2._MODELS_WITH_CACHE
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Mock streaming helpers
 # ──────────────────────────────────────────────────────────────────────────────
 

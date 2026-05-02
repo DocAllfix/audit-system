@@ -32,6 +32,14 @@ from v2.yaml_stream_parser import ParsedMarker, YamlStreamParser
 
 ANALYZE_MODEL = "gemini-2.5-flash"
 
+# Modello "lite" usato dalla Leva 4 per batch a basso valore audit
+# (aggregable/support). Non supporta caching → quando lo usiamo passiamo
+# il prompt universale inline come system_instruction.
+ANALYZE_MODEL_LITE = "gemini-2.5-flash-lite"
+
+# Set di modelli che supportano context caching (per gating della cache)
+_MODELS_WITH_CACHE = frozenset({"gemini-2.5-flash", "gemini-2.0-flash"})
+
 # Numero retry su stream interrotto prematuramente
 MAX_STREAM_RETRIES = 1
 
@@ -171,6 +179,7 @@ def analyze_batch_streaming(
     enable_retry: bool = True,
     meter_session_id: Optional[str] = None,
     compact_mode: bool = False,
+    model_override: Optional[str] = None,
 ) -> StreamResult:
     """
     Analizza un batch di documenti via streaming Gemini.
@@ -219,6 +228,7 @@ def analyze_batch_streaming(
 
     last_error: Optional[str] = None
     batch_label = f"batch_{batch_idx:03d}"
+    effective_model = model_override or ANALYZE_MODEL
 
     max_attempts = MAX_STREAM_RETRIES + 1 if enable_retry else 1
     for attempt in range(max_attempts):
@@ -233,6 +243,7 @@ def analyze_batch_streaming(
                 meter_session_id=meter_session_id,
                 batch_id=batch_label,
                 retry_count=attempt,
+                model=effective_model,
             )
         except _StreamRetryable as e:
             last_error = str(e)
@@ -251,7 +262,7 @@ def analyze_batch_streaming(
                     from v2 import token_meter
                     token_meter.record_call(
                         session_id=meter_session_id,
-                        model=ANALYZE_MODEL,
+                        model=effective_model,
                         kind="analyze",
                         retry_count=attempt,
                         error=f"non_retryable: {e}",
@@ -267,7 +278,7 @@ def analyze_batch_streaming(
             from v2 import token_meter
             token_meter.record_call(
                 session_id=meter_session_id,
-                model=ANALYZE_MODEL,
+                model=effective_model,
                 kind="analyze",
                 retry_count=max_attempts - 1,
                 error=f"all_retries_failed: {last_error}",
@@ -293,6 +304,7 @@ def _do_streaming_call(
     meter_session_id: Optional[str] = None,
     batch_id: Optional[str] = None,
     retry_count: int = 0,
+    model: str = ANALYZE_MODEL,
 ) -> StreamResult:
     """
     Esegue una singola chiamata streaming. Solleva _StreamRetryable su errori
@@ -300,12 +312,16 @@ def _do_streaming_call(
 
     `batch_id` e `retry_count` (Leva 3) finiscono nel token_meter quando
     presente, così il debug post-mortem ha contesto per call.
+
+    `model` (Leva 4) permette il routing su gemini-2.5-flash-lite per batch
+    a basso valore audit. Se il modello scelto non supporta caching,
+    `cached_content_id` viene ignorato e si usa system_instruction inline.
     """
     from google.genai import types as gtypes
     call_start = time.monotonic()
 
-    # Costruisce config: se cached_content_id presente, usa cache; altrimenti
-    # usa system_instruction inline come fallback.
+    # Costruisce config: se cached_content_id presente E il modello supporta
+    # cache, usa cache; altrimenti usa system_instruction inline.
     config_kwargs: Dict[str, Any] = {
         "temperature": 0.0,
         "top_p": 1.0,
@@ -317,7 +333,8 @@ def _do_streaming_call(
             gtypes.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
         ],
     }
-    if cached_content_id:
+    cache_supported = model in _MODELS_WITH_CACHE
+    if cached_content_id and cache_supported:
         config_kwargs["cached_content"] = cached_content_id
     elif universal_prompt:
         config_kwargs["system_instruction"] = universal_prompt
@@ -329,7 +346,7 @@ def _do_streaming_call(
     stream = None
     try:
         stream = client.models.generate_content_stream(
-            model=ANALYZE_MODEL,
+            model=model,
             contents=user_prompt,
             config=config,
         )
@@ -362,7 +379,7 @@ def _do_streaming_call(
                 token_meter.record_from_response(
                     meter_session_id,
                     last_chunk,
-                    ANALYZE_MODEL,
+                    model,
                     kind="analyze",
                     duration_seconds=duration,
                     retry_count=retry_count,
@@ -388,7 +405,7 @@ def _do_streaming_call(
                 token_meter.record_from_response(
                     meter_session_id,
                     None,
-                    ANALYZE_MODEL,
+                    model,
                     kind="analyze",
                     duration_seconds=duration,
                     retry_count=retry_count,
