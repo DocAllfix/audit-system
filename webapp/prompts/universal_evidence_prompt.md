@@ -185,6 +185,64 @@ La profondità dell'estrazione determina direttamente la qualità della checklis
 
 ---
 
+## REGOLA DI PROPORZIONALITÀ DELL'OUTPUT
+
+Il principio "1 file = 1 scheda" della Regola 2.7 è inderogabile, ma la **lunghezza** della scheda deve essere proporzionata al contenuto informativo del documento. La verbosità non sostituisce la sostanza: una scheda lunga su un documento povero è rumore, non valore.
+
+Applica i tre tier seguenti **dopo** aver applicato le REGOLE DI APPROFONDIMENTO sopra (i documenti chiave delle Regole di Approfondimento restano sempre tier ESTESO).
+
+### Tier ESTESO — sempre per i documenti chiave
+
+Sono **sempre** tier esteso e seguono le REGOLE DI APPROFONDIMENTO senza alcuna riduzione:
+- Visure camerali, statuti, atti costitutivi, certificati SOA, certificati ISO/sistemi di gestione, rating legalità, iscrizioni ad albi, partecipazioni e cariche sociali
+- DVR, DUVRI, POS, PSC, PiMUS, valutazioni rischio specifico (stress, biologico, chimico)
+- Analisi energetica e documenti ISO 50001, bilanci di sostenibilità ESG, inventari GHG/PAS 2400
+- Mansionari aziendali, organigrammi, nomine RSPP/RLS/Medico Competente/Energy Manager
+- Registri infortuni, near-miss, rapporti di non conformità, audit interni
+- Contratti di appalto principali, sublocazioni, contratti di servizio (≥ 1 pagina di clausole sostanziali)
+- Bandi, lotti, comunicazioni di aggiudicazione che riportano CIG/CUP (PNRR)
+- Giudizi di idoneità alla mansione del medico competente
+- Bilanci d'esercizio e stato patrimoniale
+
+Per questi: estrazione 100% atomica come da Regole di Approfondimento. Nessun cap di lunghezza.
+
+### Tier MEDIO — default per documenti operativi non chiave
+
+Documenti che NON rientrano nel tier ESTESO ma hanno valore audit individuale: questionari, schede fornitore, lettere di richiesta documenti, dichiarazioni sostitutive, integrazioni a manuali, modulistica compilata.
+
+Per questi:
+- Header obbligatorio sempre presente (`tipo`, `categoria`, `titolo`, `riferimento`, `data_doc`, `data_scadenza`, `emesso_da`, `soggetto`, `firme`)
+- 1-3 cluster liberi con i fatti salienti del documento
+- Ometti completamente cluster se il documento non offre dati per quel cluster (Regola 2.3)
+- Non aggiungere "Note operative" o "Considerazioni" se il documento non le contiene esplicitamente
+- Lunghezza tipica indicativa: 100-400 token per scheda (NON è un cap rigido — se il documento offre più dati strutturati, riportali tutti)
+
+### Tier MINIMO — solo per documenti ad alta frequenza e contenuto omogeneo
+
+Documenti la cui evidenza è **collettiva e ripetitiva**: attestati di formazione standard, buste paga, comunicazioni UniLav, fatture di routine, DDT/bolle di consegna, ricevute con contesto, schede dipendente proroga, attestazioni di frequenza generiche.
+
+Per questi (e solo per questi):
+- Schema scheda compatto: solo `tipo`, `titolo`, `data_doc`, `intestatario_o_oggetto`, `numero_o_riferimento`, `importo_o_durata` (se applicabile), `anomalia` (se osservi un'irregolarità — altrimenti omettere)
+- Niente cluster liberi salvo che il documento contenga un dato strutturato non riducibile
+- Lunghezza tipica indicativa: 40-150 token per scheda
+- **La Regola 2.6 (tabella riepilogativa per ≥ 3 documenti omogenei) resta obbligatoria** e qui dà il massimo valore: la tabella è il riferimento di lettura per l'auditor, le singole schede compatte sono il dettaglio per file.
+
+### Regola di tabella
+
+Le tabelle Markdown sono efficienti ma diventano illeggibili oltre 30 righe. Se una tabella riepilogativa supera 30 righe:
+- Tronca a 25 righe (le più rilevanti per data o anomalia) + 1 riga finale `| ... | (+N righe omesse, rese come schede individuali sotto) | ... |`
+- Le righe omesse vanno comunque rese come schede tier MINIMO sotto la tabella, per rispettare la Regola 2.7
+
+### Cosa NON fare mai sotto la regola di proporzionalità
+
+- ❌ Saltare la scheda di un file fisico (viola Regola 2.7)
+- ❌ Accorpare 2 file in 1 scheda
+- ❌ Ridurre un documento ESTESO a tier MINIMO o MEDIO solo perché breve sul singolo punto (es. una visura di 2 pagine resta ESTESA)
+- ❌ Inventare campi `tipo`/`categoria` per fittiziamente promuovere un documento a un tier diverso
+- ✅ Riduci verbosità, mai sostanza
+
+---
+
 ## STRUTTURA OBBLIGATORIA DELL'OUTPUT
 
 ```
