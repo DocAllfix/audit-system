@@ -34,9 +34,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# Path del prompt universale (V1 lo legge dallo stesso file)
+# Path del prompt universale V2 (isolato dal prompt V1 in PROD).
+# V1 in `webapp/modules/` legge `universal_evidence_prompt.md` (originale).
+# V2 legge la sua versione `universal_evidence_prompt_v2.md` con i fix
+# applicati per allineare nomi categoria, header obbligatorio e checklist
+# verifica conteggio schede.
 _WEBAPP_DIR = Path(__file__).resolve().parent.parent
-UNIVERSAL_PROMPT_PATH = _WEBAPP_DIR / "prompts" / "universal_evidence_prompt.md"
+UNIVERSAL_PROMPT_PATH = _WEBAPP_DIR / "prompts" / "universal_evidence_prompt_v2.md"
 
 # Modello target per il caching (deve supportare context caching)
 CACHE_MODEL = "gemini-2.5-flash"

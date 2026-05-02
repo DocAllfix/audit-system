@@ -185,11 +185,15 @@ def test_macroarea_with_documents_creates_file(tmp_path):
 
 
 def test_macroarea_without_documents_no_file(tmp_path):
-    """Macroarea senza documenti → success ma niente file."""
+    """Macroarea senza documenti → success ma niente file.
+
+    Uso "13 · ESG E RENDICONTAZIONE" (categoria V2) che non ha documenti
+    nel SAMPLE_PARSED.
+    """
     result = ib.build_macroarea_section(
         SAMPLE_PARSED,
-        "REGOLARITÀ CONTRIBUTIVA E FISCALE",  # nessun doc nel sample
-        section_index=2,
+        "13 · ESG E RENDICONTAZIONE",
+        section_index=13,
         session_id="sess4",
         base_dir=tmp_path,
     )
@@ -239,15 +243,17 @@ def test_macroarea_extra_fields_rendered(tmp_path):
 # Build all sections
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_build_all_sections_includes_header_and_10_macroaree(tmp_path):
+def test_build_all_sections_includes_header_and_18_macroaree(tmp_path):
+    """Allineato al prompt universale V2: 1 header + 18 macroaree = 19."""
     results = ib.build_all_sections(
         SAMPLE_PARSED, "sessall", docs_estratti=3, docs_vuoti=0, base_dir=tmp_path,
     )
-    # 1 header + 10 macroaree = 11 risultati
-    assert len(results) == 11
+    # 1 header + 18 macroaree = 19 risultati
+    assert len(results) == 19
     assert results[0].section_index == 0
     assert results[0].section_name == "header"
-    # I successivi sono in MACROAREA_ORDER
+    # I successivi sono in MACROAREA_ORDER (18 voci, formato "NN · NOME")
+    assert len(ib.MACROAREA_ORDER) == 18
     for i, expected in enumerate(ib.MACROAREA_ORDER, start=1):
         assert results[i].section_name == expected
 
@@ -303,10 +309,13 @@ def test_cleanup_invalid_session_id(tmp_path):
 def test_builder_summary_aggregates(tmp_path):
     results = ib.build_all_sections(SAMPLE_PARSED, "summa", base_dir=tmp_path)
     summary = ib.builder_summary(results)
-    assert summary["total_sections"] == 11
-    assert summary["success"] == 11
+    # 1 header + 18 macroaree = 19 risultati; tutti success
+    assert summary["total_sections"] == 19
+    assert summary["success"] == 19
     assert summary["failed"] == 0
-    assert summary["files_created"] == 3  # header + 2 popolate
+    # Solo 3 file creati: header + 08 LEGALE + 10 SSL (le altre macroaree
+    # sono vuote per il SAMPLE_PARSED)
+    assert summary["files_created"] == 3
 
 
 def test_builder_summary_empty():
@@ -337,3 +346,144 @@ def test_no_mutation_of_input(tmp_path):
     snapshot = copy.deepcopy(SAMPLE_PARSED)
     ib.build_all_sections(SAMPLE_PARSED, "nomut", base_dir=tmp_path)
     assert SAMPLE_PARSED == snapshot
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Fix routing macroarea V2 — match per codice numerico + retro-compat
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_extract_category_code_canonical_format():
+    """Formato canonico `NN · NOME` → codice zero-padded."""
+    assert ib._extract_category_code("08 · DOCUMENTAZIONE LEGALE E SOCIETARIA") == "08"
+    assert ib._extract_category_code("10 · SALUTE E SICUREZZA SUL LAVORO") == "10"
+    assert ib._extract_category_code("01 · CONTESTO E PARTI INTERESSATE") == "01"
+    assert ib._extract_category_code("18 · ALTRI") == "18"
+
+
+def test_extract_category_code_variants_tolerated():
+    """Varianti del modello (abbreviate, non zero-padded, separatori variabili)."""
+    # Varianti tipo "08 · LEGALE/SOCIETARIA" o "08 · LEGALE" → comunque "08"
+    assert ib._extract_category_code("08 · LEGALE/SOCIETARIA") == "08"
+    assert ib._extract_category_code("08·LEGALE") == "08"
+    assert ib._extract_category_code("08:LEGALE") == "08"
+    # Numero senza zero-padding
+    assert ib._extract_category_code("8 LEGALE") == "08"
+    assert ib._extract_category_code("1 CONTESTO") == "01"
+    # Spazi iniziali
+    assert ib._extract_category_code("  10 · SSL") == "10"
+
+
+def test_extract_category_code_invalid_returns_none():
+    """Stringhe senza prefisso numerico o codice fuori range → None."""
+    assert ib._extract_category_code("DOCUMENTAZIONE LEGALE E SOCIETARIA") is None
+    assert ib._extract_category_code("LEGALE 08") is None  # numero non in testa
+    assert ib._extract_category_code("19 · INVENTATA") is None  # fuori range 1-18
+    assert ib._extract_category_code("99 · IMPOSSIBILE") is None
+    assert ib._extract_category_code("0 · ZERO") is None
+    assert ib._extract_category_code("") is None
+    assert ib._extract_category_code(None) is None  # type: ignore
+
+
+def test_docs_in_macroarea_match_by_code_when_model_writes_variant():
+    """
+    INVARIANTE CRITICA: se il modello scrive `08 · LEGALE/SOCIETARIA`
+    (variante abbreviata), la VISURA deve essere comunque routata alla
+    macroarea `08 · DOCUMENTAZIONE LEGALE E SOCIETARIA` via match codice.
+    """
+    parsed = {
+        "sezioni": [
+            {
+                "id": "08",
+                "nome": "08 · LEGALE/SOCIETARIA",  # variante abbreviata del modello
+                "documenti": [
+                    {
+                        "tipo": "Visura Camerale",
+                        "titolo": "Visura MEDIL",
+                        "categoria": "08 · LEGALE/SOCIETARIA",
+                        "data_doc": "10/08/2025",
+                    },
+                ],
+            },
+        ],
+    }
+    docs = ib._docs_in_macroarea(parsed, "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA")
+    assert len(docs) == 1
+    assert docs[0]["tipo"] == "Visura Camerale"
+
+
+def test_docs_in_macroarea_match_by_code_with_short_number():
+    """`8` invece di `08` → comunque match a 08."""
+    parsed = {
+        "sezioni": [
+            {"nome": "8 · CIAO", "documenti": [{"tipo": "Visura"}]},
+        ],
+    }
+    docs = ib._docs_in_macroarea(parsed, "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA")
+    assert len(docs) == 1
+
+
+def test_docs_in_macroarea_substring_fallback_retro_compat():
+    """
+    Retro-compat: macroarea senza prefisso (test legacy) usa substring match.
+    """
+    parsed = {
+        "sezioni": [
+            {
+                "nome": "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA",
+                "documenti": [{"tipo": "Visura"}],
+            },
+        ],
+    }
+    # macroarea senza prefisso → fallback substring → match
+    docs = ib._docs_in_macroarea(parsed, "DOCUMENTAZIONE LEGALE E SOCIETARIA")
+    assert len(docs) == 1
+
+
+def test_docs_in_macroarea_does_not_cross_contaminate():
+    """
+    Documenti di codice 08 NON devono finire in macroarea 10 e viceversa.
+    """
+    parsed = {
+        "sezioni": [
+            {
+                "nome": "08 · LEGALE",
+                "documenti": [{"tipo": "Visura"}],
+            },
+            {
+                "nome": "10 · SSL",
+                "documenti": [{"tipo": "DVR"}],
+            },
+        ],
+    }
+    legale = ib._docs_in_macroarea(parsed, "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA")
+    ssl = ib._docs_in_macroarea(parsed, "10 · SALUTE E SICUREZZA SUL LAVORO")
+    assert {d["tipo"] for d in legale} == {"Visura"}
+    assert {d["tipo"] for d in ssl} == {"DVR"}
+
+
+def test_docs_in_macroarea_invalid_section_code_falls_through():
+    """
+    Sezione con codice fuori range (es. "19 · INVENTATA") cade nel fallback
+    substring. Se il nome non matcha, documento NON finisce in nessuna
+    macroarea (verrà perso, ma è il modello che ha sbagliato).
+    """
+    parsed = {
+        "sezioni": [
+            {"nome": "19 · INVENTATA", "documenti": [{"tipo": "Strano"}]},
+        ],
+    }
+    # Cerca in macroarea standard: nessun match
+    for m in ("08 · DOCUMENTAZIONE LEGALE E SOCIETARIA",
+              "10 · SALUTE E SICUREZZA SUL LAVORO",
+              "18 · ALTRI"):
+        docs = ib._docs_in_macroarea(parsed, m)
+        assert docs == []
+
+
+def test_category_code_to_macroarea_mapping_complete():
+    """Tutte le 18 categorie 01-18 hanno un mapping macroarea."""
+    assert len(ib.CATEGORY_CODE_TO_MACROAREA) == 18
+    for n in range(1, 19):
+        code = f"{n:02d}"
+        assert code in ib.CATEGORY_CODE_TO_MACROAREA
+        assert ib.CATEGORY_CODE_TO_MACROAREA[code].startswith(f"{code} · ")

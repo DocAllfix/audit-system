@@ -48,19 +48,42 @@ except ImportError:
 # Config
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Macroaree SOP nell'ordine canonico (replica V1 report_generator.MACROAREA_ORDER)
+# Macroaree V2 — allineate alle 18 categorie del prompt universale_v2.
+# Ogni macroarea è nel formato `NN · NOME` come scritto dal modello, così il
+# match per codice numerico è deterministico (vedi _extract_category_code +
+# _docs_in_macroarea).
+#
+# Le macroaree con `NN ·` permettono routing robusto a varianti del nome
+# scritto dal modello (es. "08 · LEGALE/SOCIETARIA" matcha lo stesso
+# "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA" perché il prefisso è "08").
 MACROAREA_ORDER = [
-    "DOCUMENTAZIONE LEGALE E SOCIETARIA",
-    "REGOLARITÀ CONTRIBUTIVA E FISCALE",
-    "SICUREZZA SUL LAVORO",
-    "SORVEGLIANZA SANITARIA",
-    "FORMAZIONE E ADDESTRAMENTO",
-    "GESTIONE RISORSE UMANE",
-    "GESTIONE MEZZI E ATTREZZATURE",
-    "GESTIONE FORNITORI E APPALTI",
-    "GESTIONE AMBIENTALE E RIFIUTI",
-    "ALTRO",
+    "01 · CONTESTO E PARTI INTERESSATE",
+    "02 · LEADERSHIP E IMPEGNO",
+    "03 · PIANIFICAZIONE",
+    "04 · RISORSE",
+    "05 · OPERATIVITÀ",
+    "06 · VALUTAZIONE DELLE PRESTAZIONI",
+    "07 · MIGLIORAMENTO",
+    "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA",
+    "09 · RISORSE UMANE E LAVORO",
+    "10 · SALUTE E SICUREZZA SUL LAVORO",
+    "11 · AMBIENTE ED ENERGIA",
+    "12 · CLIMA E CARBONIO",
+    "13 · ESG E RENDICONTAZIONE",
+    "14 · SICUREZZA DELLE INFORMAZIONI",
+    "15 · ANTICORRUZIONE E COMPLIANCE",
+    "16 · PARITÀ DI GENERE E DIVERSITY",
+    "17 · SICUREZZA STRADALE",
+    "18 · ALTRI",
 ]
+
+# Mapping deterministico codice → nome canonico macroarea.
+# Usato come fallback dal routing pipeline quando il modello scrive una
+# variante della categoria che non matcha esattamente (es. "08 · LEGALE/
+# SOCIETARIA" → routato a "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA").
+CATEGORY_CODE_TO_MACROAREA: Dict[str, str] = {
+    f"{int(m[:2]):02d}": m for m in MACROAREA_ORDER
+}
 
 # Path base sezioni
 _WEBAPP_DIR = Path(__file__).resolve().parent.parent
@@ -194,22 +217,76 @@ def _extract_company_name(parsed_data: Dict[str, Any]) -> str:
     return name
 
 
+# Regex per estrarre il prefisso numerico di categoria (es. "08", "10", "1").
+# Tollerante a varianti di formattazione: `08 · NOME`, `08·NOME`, `08:NOME`,
+# `08-NOME`, `8 NOME`, `8.NOME`. Match solo all'inizio della stringa.
+_CATEGORY_CODE_RE = re.compile(r"^\s*(\d{1,2})\b")
+
+
+def _extract_category_code(s: str) -> Optional[str]:
+    """
+    Estrae il prefisso numerico (zero-padded a 2 cifre) da una stringa
+    categoria del modello. Ritorna None se il prefisso non è valido (range
+    01-18) o se la stringa non inizia con un numero.
+
+    Esempi:
+      "08 · DOCUMENTAZIONE LEGALE E SOCIETARIA" → "08"
+      "08 · LEGALE/SOCIETARIA"                  → "08"
+      "8 LEGALE"                                 → "08"
+      "DOCUMENTAZIONE LEGALE E SOCIETARIA"       → None (no prefisso)
+      "19 · INVENTATA"                           → None (fuori range)
+    """
+    if not s:
+        return None
+    m = _CATEGORY_CODE_RE.match(str(s))
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except ValueError:
+        return None
+    if not (1 <= n <= 18):
+        return None
+    return f"{n:02d}"
+
+
 def _docs_in_macroarea(parsed_data: Dict[str, Any], macroarea: str) -> List[Dict[str, Any]]:
     """
     Estrae tutti i documenti del parsed_data appartenenti a una macroarea.
 
-    Logica: il prompt universale produce sezioni con `nome` o `categoria`
-    che possono mappare a una macroarea. Cerca match esatto o fuzzy.
+    Strategia di match (in ordine):
+    1. **Match per codice numerico** (priorità): se sia la `macroarea`
+       richiesta sia il `sezione.nome` hanno un prefisso numerico valido
+       (01-18), confronta i codici. Robusto a varianti del nome esteso
+       (es. "08 · LEGALE/SOCIETARIA" matcha "08 · DOCUMENTAZIONE LEGALE...").
+    2. **Fallback substring** (retro-compatibilità): se uno dei due manca
+       del prefisso numerico (es. test che passano "DOCUMENTAZIONE LEGALE
+       E SOCIETARIA" senza prefisso), match per substring case-insensitive
+       come la logica originale.
+
+    Garantisce zero regressioni sui test esistenti e fix del bug di
+    variabilità del modello sui nomi categoria.
     """
+    macroarea_code = _extract_category_code(macroarea)
     macroarea_up = macroarea.upper()
-    out = []
+
+    out: List[Dict[str, Any]] = []
     for sezione in parsed_data.get("sezioni") or []:
         if not isinstance(sezione, dict):
             continue
-        sec_name = str(sezione.get("nome", "")).upper()
-        # Match esatto o substring (es. "01 · DOCUMENTAZIONE LEGALE" contiene
-        # "DOCUMENTAZIONE LEGALE")
-        if macroarea_up in sec_name or sec_name in macroarea_up:
+        sec_name = str(sezione.get("nome", ""))
+        sec_code = _extract_category_code(sec_name)
+        sec_name_up = sec_name.upper()
+
+        match = False
+        if macroarea_code is not None and sec_code is not None:
+            # Strategia 1 — match deterministico per codice
+            match = (macroarea_code == sec_code)
+        else:
+            # Strategia 2 — fallback substring (retro-compat tests)
+            match = (macroarea_up in sec_name_up) or (sec_name_up in macroarea_up)
+
+        if match:
             for doc in sezione.get("documenti") or []:
                 if isinstance(doc, dict):
                     out.append(doc)
@@ -383,7 +460,7 @@ def build_header_section(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Builder: MACROAREA (file 01..10)
+# Builder: MACROAREA (file 01..18)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _render_doc_card(doc_obj, doc_entry: Dict[str, Any]) -> None:
@@ -530,11 +607,11 @@ def build_all_sections(
     base_dir: Optional[Path] = None,
 ) -> List[SectionBuildResult]:
     """
-    Genera header + tutte le 10 macroaree SOP.
+    Genera header + tutte le 18 macroaree V2 (allineate al prompt universale).
 
     Returns:
         Lista di SectionBuildResult, ordinati per section_index.
-        Le macroaree senza documenti hanno output_path=None.
+        Le macroaree senza documenti hanno output_path=None (file non creato).
     """
     results: List[SectionBuildResult] = []
     results.append(build_header_section(

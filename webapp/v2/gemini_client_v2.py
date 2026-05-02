@@ -46,9 +46,9 @@ MAX_STREAM_RETRIES = 1
 # Timeout massimo tra due chunk consecutivi (secondi)
 INTER_CHUNK_TIMEOUT = 60.0
 
-# Path del prompt universale (condiviso con cache_manager)
+# Path del prompt universale V2 (isolato da V1 PROD, vedi cache_manager.py)
 _WEBAPP_DIR = Path(__file__).resolve().parent.parent
-UNIVERSAL_PROMPT_PATH = _WEBAPP_DIR / "prompts" / "universal_evidence_prompt.md"
+UNIVERSAL_PROMPT_PATH = _WEBAPP_DIR / "prompts" / "universal_evidence_prompt_v2.md"
 
 # Cap dinamico per documento (replica V1 _doc_char_cap)
 _DOC_CAP_PATTERNS = (

@@ -516,9 +516,20 @@ def process_zip_v2(
             + [(b, True, lite_model_for_aggregable) for b in batches_aggregable]
         )
 
+        # Log incondizionato sullo stato Fase C (anche quando flag spento)
+        # per debugging e telemetria.
+        print(
+            f"[V2 PIPELINE] Fase C status: enabled={aggregable_compact_enabled}, "
+            f"role_map_size={len(role_by_filename)}, "
+            f"docs_total={len(documents)}, "
+            f"docs_standard={len(documents_standard)}, "
+            f"docs_aggregable={len(documents_aggregable)}, "
+            f"batches_standard={len(batches_standard)}, "
+            f"batches_aggregable={len(batches_aggregable)}"
+        )
         if aggregable_compact_enabled and documents_aggregable:
             print(
-                f"[V2 PIPELINE] Leva 2 Fase C: split in "
+                f"[V2 PIPELINE] Leva 2 Fase C ATTIVA: split in "
                 f"{len(batches_standard)} batch standard + "
                 f"{len(batches_aggregable)} batch aggregable "
                 f"(compact, model={lite_model_for_aggregable or 'flash'})"
