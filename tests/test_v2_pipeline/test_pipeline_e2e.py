@@ -15,6 +15,7 @@ Coperture:
 from __future__ import annotations
 
 import io
+import os
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -280,3 +281,177 @@ def test_process_v2_stub_still_works():
     payload = pl.process_v2_stub()
     assert payload["status"] == "v2_stub_alive"
     assert payload["phase"] == "8_orchestrator"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Auto-tuning leve (Leva 2C compact + Leva 4 model_mix)
+# Decisione automatica basata sul numero di file AGGREGABLE.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_resolve_leva_flag_explicit_true(monkeypatch):
+    """Flag esplicito 'true' → ON forzato, source='manual_on'."""
+    monkeypatch.setenv("V2_LEVA_TEST_FLAG", "true")
+    enabled, source = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=False)
+    assert enabled is True
+    assert source == "manual_on"
+
+
+def test_resolve_leva_flag_explicit_false(monkeypatch):
+    """Flag esplicito 'false' → OFF forzato, source='manual_off'."""
+    monkeypatch.setenv("V2_LEVA_TEST_FLAG", "false")
+    enabled, source = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=True)
+    assert enabled is False
+    assert source == "manual_off"
+
+
+def test_resolve_leva_flag_auto_default_on(monkeypatch):
+    """Flag non settato + auto_default=True → ON, source='auto_on'."""
+    monkeypatch.delenv("V2_LEVA_TEST_FLAG", raising=False)
+    enabled, source = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=True)
+    assert enabled is True
+    assert source == "auto_on"
+
+
+def test_resolve_leva_flag_auto_default_off(monkeypatch):
+    """Flag non settato + auto_default=False → OFF, source='auto_off'."""
+    monkeypatch.delenv("V2_LEVA_TEST_FLAG", raising=False)
+    enabled, source = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=False)
+    assert enabled is False
+    assert source == "auto_off"
+
+
+def test_resolve_leva_flag_explicit_auto_string(monkeypatch):
+    """'auto' esplicito → applica auto_default."""
+    monkeypatch.setenv("V2_LEVA_TEST_FLAG", "auto")
+    enabled, source = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=True)
+    assert enabled is True
+    assert source == "auto_on"
+
+
+def test_resolve_leva_flag_unknown_value_treated_as_auto(monkeypatch):
+    """Valori sconosciuti (typo) trattati come 'auto'."""
+    monkeypatch.setenv("V2_LEVA_TEST_FLAG", "yes")  # typo classico
+    enabled, _ = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=False)
+    assert enabled is False
+
+
+def test_resolve_leva_flag_uppercase_tolerated(monkeypatch):
+    """Maiuscole tollerate (case-insensitive)."""
+    monkeypatch.setenv("V2_LEVA_TEST_FLAG", "TRUE")
+    enabled, _ = pl._resolve_leva_flag("V2_LEVA_TEST_FLAG", auto_default=False)
+    assert enabled is True
+
+
+def test_count_aggregable_documents_basic():
+    """Conteggio file AGGREGABLE in documents."""
+    documents = [
+        {"filename": "a.pdf", "content": "x"},
+        {"filename": "b.pdf", "content": "y"},
+        {"filename": "c.pdf", "content": "z"},
+        {"filename": "d.pdf", "content": "w"},
+    ]
+    role_by_filename = {
+        "a.pdf": "AGGREGABLE",
+        "b.pdf": "CORE",
+        "c.pdf": "AGGREGABLE",
+        "d.pdf": "SUPPORT",
+    }
+    n = pl._count_aggregable_documents(documents, role_by_filename)
+    assert n == 2
+
+
+def test_count_aggregable_documents_empty():
+    """Liste vuote → 0."""
+    assert pl._count_aggregable_documents([], {}) == 0
+    assert pl._count_aggregable_documents([{"filename": "a.pdf"}], {}) == 0
+
+
+def test_count_aggregable_documents_filename_missing_in_role_map():
+    """Filename non in map → ignorato (non contato)."""
+    documents = [{"filename": "unknown.pdf", "content": "x"}]
+    role_by_filename = {"a.pdf": "AGGREGABLE"}
+    assert pl._count_aggregable_documents(documents, role_by_filename) == 0
+
+
+def test_build_role_by_filename_uses_default_when_audit_role_none():
+    """Se classified ha audit_role=None, viene derivato dalla classe."""
+    from v2.schemas.classification import ClassifiedFile, DocumentClass
+
+    classified = [
+        ClassifiedFile(filename="att.pdf", classe=DocumentClass.ATTESTATO,
+                       confidence=0.9, audit_role=None),
+        ClassifiedFile(filename="dvr.pdf", classe=DocumentClass.DVR,
+                       confidence=0.95, audit_role=None),
+    ]
+    role_map = pl._build_role_by_filename(classified, skipped_filenames=set())
+    assert role_map["att.pdf"] == "AGGREGABLE"
+    assert role_map["dvr.pdf"] == "CORE"
+
+
+def test_build_role_by_filename_skips_files_in_skipped_set():
+    """Filename in skipped_filenames non vengono inclusi nella mappa."""
+    from v2.schemas.classification import ClassifiedFile, DocumentClass
+
+    classified = [
+        ClassifiedFile(filename="a.pdf", classe=DocumentClass.ATTESTATO, confidence=0.9),
+        ClassifiedFile(filename="skip.pdf", classe=DocumentClass.ATTESTATO,
+                       confidence=0.9, audit_role="NOISE"),
+    ]
+    role_map = pl._build_role_by_filename(classified, skipped_filenames={"skip.pdf"})
+    assert "a.pdf" in role_map
+    assert "skip.pdf" not in role_map
+
+
+def test_build_role_by_filename_empty_classified_returns_empty():
+    """Lista classified vuota o None → mappa vuota (no errore)."""
+    assert pl._build_role_by_filename([], skipped_filenames=set()) == {}
+    assert pl._build_role_by_filename(None, skipped_filenames=set()) == {}
+
+
+def test_default_min_aggregable_threshold_is_50():
+    """La soglia di default deve essere 50 file AGGREGABLE."""
+    assert pl.DEFAULT_MIN_AGGREGABLE_FOR_COMPACT == 50
+
+
+def test_resolve_leva_flag_reads_correct_env_var(monkeypatch):
+    """Ogni flag legge la propria env var, non si influenzano fra loro."""
+    monkeypatch.setenv("V2_LEVA2_AGGREGABLE_COMPACT", "true")
+    monkeypatch.delenv("V2_LEVA4_MODEL_MIX", raising=False)
+    enabled2, src2 = pl._resolve_leva_flag(
+        "V2_LEVA2_AGGREGABLE_COMPACT", auto_default=False
+    )
+    enabled4, src4 = pl._resolve_leva_flag(
+        "V2_LEVA4_MODEL_MIX", auto_default=False
+    )
+    assert (enabled2, src2) == (True, "manual_on")
+    assert (enabled4, src4) == (False, "auto_off")
+
+
+def test_auto_tuning_scenario_sirih_below_threshold():
+    """
+    Simula scenario SIRIH (33 file aggregable, sotto soglia 50): il sistema
+    deve scegliere auto_default=False per compact_mode.
+    """
+    n_aggregable = 33  # SIRIH reale
+    auto_default = n_aggregable >= pl.DEFAULT_MIN_AGGREGABLE_FOR_COMPACT
+    assert auto_default is False  # leva DISABILITATA su pratica piccola
+
+
+def test_auto_tuning_scenario_medil_above_threshold():
+    """
+    Simula scenario MEDIL (81 file aggregable, sopra soglia 50): il sistema
+    deve scegliere auto_default=True per compact_mode.
+    """
+    n_aggregable = 81  # MEDIL reale
+    auto_default = n_aggregable >= pl.DEFAULT_MIN_AGGREGABLE_FOR_COMPACT
+    assert auto_default is True  # leva ABILITATA su pratica grande
+
+
+def test_threshold_configurable_via_env(monkeypatch):
+    """V2_MIN_AGGREGABLE_THRESHOLD permette override della soglia."""
+    monkeypatch.setenv("V2_MIN_AGGREGABLE_THRESHOLD", "20")
+    threshold = int(os.environ.get("V2_MIN_AGGREGABLE_THRESHOLD",
+                                     str(pl.DEFAULT_MIN_AGGREGABLE_FOR_COMPACT)))
+    assert threshold == 20
+    # Con questa soglia, anche SIRIH (33) entrerebbe in auto_on
+    assert 33 >= threshold

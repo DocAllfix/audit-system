@@ -41,6 +41,107 @@ def process_v2_stub() -> Dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Auto-tuning leve V2 (Leva 2C compact + Leva 4 model mix)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Le leve compact_mode (Fase 2C) e model_mix (Leva 4) ottimizzano i costi
+# consolidando i documenti AGGREGABLE in batch dedicati con tier MINIMO +
+# flash-lite. Sono efficaci solo quando il volume aggregable è alto.
+#
+# Su pratiche piccole (es. ZIP ISO 27001 con poche decine di file dove ogni
+# documento è una procedura SGSI individuale), il consolidamento penalizza la
+# qualità dell'output (vedi confronto SIRIH 28 MB: V1 93 schede vs V2 con leve
+# attive solo 30 schede).
+#
+# La logica auto-tuning:
+# - Se classified contiene >= MIN_AGGREGABLE_FOR_COMPACT file con audit_role
+#   AGGREGABLE → leve abilitate (comportamento ottimizzato)
+# - Altrimenti → leve disabilitate (comportamento V1-like, qualità preservata)
+#
+# Override manuale via env var:
+#   V2_LEVA2_AGGREGABLE_COMPACT={true|false|auto}  (default "auto")
+#   V2_LEVA4_MODEL_MIX={true|false|auto}            (default "auto")
+
+# Soglia minima di file AGGREGABLE per attivazione auto delle leve compact/lite
+DEFAULT_MIN_AGGREGABLE_FOR_COMPACT = 50
+
+
+def _resolve_leva_flag(env_name: str, auto_default: bool) -> Tuple[bool, str]:
+    """
+    Risolve flag leva tri-stato: 'true' / 'false' / 'auto' (default).
+
+    Args:
+        env_name: nome variabile ambiente (es. "V2_LEVA2_AGGREGABLE_COMPACT")
+        auto_default: valore di default quando il flag è 'auto' o non settato
+
+    Returns:
+        (enabled, source) dove source ∈ {"manual_on", "manual_off", "auto_on",
+        "auto_off"}. Utile per logging.
+    """
+    raw = os.environ.get(env_name, "auto").strip().lower()
+    if raw == "true":
+        return (True, "manual_on")
+    if raw == "false":
+        return (False, "manual_off")
+    # "auto" o valore non riconosciuto → applica auto_default
+    return (auto_default, "auto_on" if auto_default else "auto_off")
+
+
+def _count_aggregable_documents(
+    documents: List[Dict[str, Any]],
+    role_by_filename: Dict[str, str],
+) -> int:
+    """
+    Conta i documenti effettivamente eligibili per il compact_mode.
+
+    Un documento è "aggregable" se:
+    - è presente nei `documents` (post triage + OCR + dedup safety net)
+    - il suo audit_role mappato è "AGGREGABLE"
+
+    Documenti con role None, CORE, SUPPORT, NOISE non contano.
+    """
+    n = 0
+    for d in documents:
+        fname = d.get("filename")
+        if fname and role_by_filename.get(fname) == "AGGREGABLE":
+            n += 1
+    return n
+
+
+def _build_role_by_filename(
+    classified: List[Any],
+    skipped_filenames: set,
+) -> Dict[str, str]:
+    """
+    Costruisce mappa filename → audit_role (stringa) dai classified, escludendo
+    i file già marcati come skipped dalla safety net (Leva 2 Fase B).
+
+    Quando audit_role è None nel ClassifiedFile, viene derivato dal default
+    deterministico (CLASS_TO_DEFAULT_ROLE in schemas/classification.py).
+    """
+    out: Dict[str, str] = {}
+    if not classified:
+        return out
+    from v2.schemas.classification import (
+        DocumentClass,
+        default_audit_role_for,
+    )
+    for cf in classified:
+        if cf.filename in skipped_filenames:
+            continue
+        role = cf.audit_role
+        if role is None:
+            try:
+                classe_str = cf.classe if isinstance(cf.classe, str) else cf.classe.value
+                role = default_audit_role_for(DocumentClass(classe_str)).value
+            except Exception:
+                role = "SUPPORT"
+        role_str = role if isinstance(role, str) else role.value
+        out[cf.filename] = role_str
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Smart batching (replica V1 First Fit Decreasing)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -450,33 +551,53 @@ def process_zip_v2(
 
         cached_id = get_cached_prompt(client)
 
-        # Leva 2 Fase C: separa i documenti in 2 pool basati sull'audit_role
-        # quando il flag V2_LEVA2_AGGREGABLE_COMPACT è attivo. I file
-        # AGGREGABLE vanno in un pool dedicato analizzato con compact_mode=True.
-        # I file CORE/SUPPORT vanno nel pool standard.
-        aggregable_compact_enabled = (
-            os.environ.get("V2_LEVA2_AGGREGABLE_COMPACT", "false").lower() == "true"
-            and bool(classified)
-        )
-        role_by_filename: Dict[str, str] = {}
-        if aggregable_compact_enabled:
-            from v2.schemas.classification import (
-                DocumentClass,
-                default_audit_role_for,
-            )
-            for cf in classified:
-                if cf.filename in skipped_filenames:
-                    continue
-                role = cf.audit_role
-                if role is None:
-                    try:
-                        classe_str = cf.classe if isinstance(cf.classe, str) else cf.classe.value
-                        role = default_audit_role_for(DocumentClass(classe_str)).value
-                    except Exception:
-                        role = "SUPPORT"
-                role_str = role if isinstance(role, str) else role.value
-                role_by_filename[cf.filename] = role_str
+        # ── AUTO-TUNING LEVE 2C + 4 ─────────────────────────────────────────
+        # Le leve compact_mode + model_mix sono efficaci solo quando ci sono
+        # molti file AGGREGABLE da consolidare. Su pratiche piccole/specifiche
+        # (es. ISO 27001 con procedure SGSI individuali) il consolidamento
+        # penalizza la qualità dell'output. Quindi:
+        # - Calcoliamo SEMPRE role_by_filename (zero costo, in-memory)
+        # - Contiamo gli AGGREGABLE effettivi in `documents`
+        # - Decidiamo auto-default ON/OFF in base alla soglia
+        # - Override manuale possibile via env var (true/false/auto)
+        role_by_filename = _build_role_by_filename(classified, skipped_filenames)
+        n_aggregable = _count_aggregable_documents(documents, role_by_filename)
 
+        threshold = int(
+            os.environ.get(
+                "V2_MIN_AGGREGABLE_THRESHOLD",
+                str(DEFAULT_MIN_AGGREGABLE_FOR_COMPACT),
+            )
+        )
+        auto_should_compact = (
+            bool(classified) and n_aggregable >= threshold
+        )
+
+        aggregable_compact_enabled, compact_source = _resolve_leva_flag(
+            "V2_LEVA2_AGGREGABLE_COMPACT", auto_default=auto_should_compact
+        )
+        # `bool(classified)` è una pre-condizione strutturale: se il classifier
+        # non è girato (test, dry-run) NON possiamo sapere quali file siano
+        # AGGREGABLE → forziamo OFF per sicurezza
+        aggregable_compact_enabled = aggregable_compact_enabled and bool(classified)
+
+        # Model mix (Leva 4): ha senso SOLO se compact è attivo (è un routing
+        # sui batch aggregable). Auto-default segue la stessa soglia di compact.
+        model_mix_enabled, model_mix_source = _resolve_leva_flag(
+            "V2_LEVA4_MODEL_MIX", auto_default=auto_should_compact
+        )
+        model_mix_enabled = model_mix_enabled and aggregable_compact_enabled
+
+        print(
+            f"[V2 PIPELINE] Auto-tuning leve: aggregable_count={n_aggregable} "
+            f"(soglia={threshold}). "
+            f"compact_mode={'ON' if aggregable_compact_enabled else 'OFF'} "
+            f"({compact_source}), "
+            f"model_mix={'ON' if model_mix_enabled else 'OFF'} "
+            f"({model_mix_source})"
+        )
+
+        # Split documenti in 2 pool secondo decisione finale
         documents_standard: List[Dict[str, Any]] = []
         documents_aggregable: List[Dict[str, Any]] = []
         if aggregable_compact_enabled:
@@ -500,11 +621,6 @@ def process_zip_v2(
             else []
         )
 
-        # Leva 4: model mix. Quando attivo, batch aggregable usano flash-lite
-        # (10× meno costoso). MAI applicato a CORE/SUPPORT.
-        model_mix_enabled = (
-            os.environ.get("V2_LEVA4_MODEL_MIX", "false").lower() == "true"
-        )
         from v2.gemini_client_v2 import ANALYZE_MODEL_LITE
         lite_model_for_aggregable = (
             ANALYZE_MODEL_LITE if model_mix_enabled else None
@@ -516,24 +632,14 @@ def process_zip_v2(
             + [(b, True, lite_model_for_aggregable) for b in batches_aggregable]
         )
 
-        # Log incondizionato sullo stato Fase C (anche quando flag spento)
-        # per debugging e telemetria.
+        # Log batch split per debugging
         print(
-            f"[V2 PIPELINE] Fase C status: enabled={aggregable_compact_enabled}, "
-            f"role_map_size={len(role_by_filename)}, "
-            f"docs_total={len(documents)}, "
-            f"docs_standard={len(documents_standard)}, "
-            f"docs_aggregable={len(documents_aggregable)}, "
+            f"[V2 PIPELINE] Batch split: docs_total={len(documents)}, "
+            f"standard={len(documents_standard)}, aggregable={len(documents_aggregable)}, "
             f"batches_standard={len(batches_standard)}, "
-            f"batches_aggregable={len(batches_aggregable)}"
+            f"batches_aggregable={len(batches_aggregable)}, "
+            f"model_aggregable={lite_model_for_aggregable or 'flash'}"
         )
-        if aggregable_compact_enabled and documents_aggregable:
-            print(
-                f"[V2 PIPELINE] Leva 2 Fase C ATTIVA: split in "
-                f"{len(batches_standard)} batch standard + "
-                f"{len(batches_aggregable)} batch aggregable "
-                f"(compact, model={lite_model_for_aggregable or 'flash'})"
-            )
 
         phase_start = time.monotonic()
         emitter.emit_phase_start(PipelinePhase.ANALYZE, total_items=len(all_batches))
