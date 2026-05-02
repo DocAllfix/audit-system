@@ -370,11 +370,63 @@ def process_zip_v2(
             metrics=ocr_summary(ocr_results) if ocr_results else {},
         )
 
+    # ── Leva 2 Fase B: applica safety net ai classified ────────────────
+    # Filtra i file marcati audit_role=NOISE (con 4 layer di safety net) PRIMA
+    # di costruire i documents per analyze. Attivata via env var
+    # `V2_LEVA2_SKIP_NOISE=true`. Quando spenta, comportamento invariato.
+    skipped_filenames: set = set()
+    relevance_ledger: List[Dict[str, Any]] = []
+    relevance_stats: Dict[str, Any] = {}
+    if (
+        classified
+        and os.environ.get("V2_LEVA2_SKIP_NOISE", "false").lower() == "true"
+        and not dry_run
+    ):
+        from v2.relevance_safetynet import apply_safety_net
+
+        # files_index serve al dedup hash: mappa filename → file_info con
+        # extracted_text. Lo costruiamo dai 3 set di file processati.
+        files_index = {
+            f["filename"]: f
+            for f in (triaged.get("native_text", []) + needs_ocr_files + non_pdf_with_text)
+        }
+        sn_result = apply_safety_net(classified, files_index)
+        skipped_filenames = {cf.filename for cf in sn_result["skipped"]}
+        relevance_ledger = sn_result["ledger"]
+        relevance_stats = sn_result["stats"]
+        if skipped_filenames:
+            print(
+                f"[V2 PIPELINE] Leva 2 Fase B: {len(skipped_filenames)} file "
+                f"marcati NOISE e skippati (cap {relevance_stats.get('skipped_pct', 0)}%). "
+                f"Whitelist override: {relevance_stats.get('whitelist_overrides_to_core', 0)}, "
+                f"dedup: {relevance_stats.get('duplicates_marked_noise', 0)}"
+            )
+        # Persisti il ledger su disco (il rendering nel docx arriverà in Fase C)
+        try:
+            import json as _json
+            ledger_dir = Path(__file__).resolve().parent.parent.parent / "temp" / "relevance_ledger"
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "session_id": session_id,
+                "stats": relevance_stats,
+                "ledger": relevance_ledger,
+                "details": sn_result.get("details", {}),
+            }
+            out_path = ledger_dir / f"{session_id}.json"
+            tmp = out_path.with_suffix(".json.tmp")
+            tmp.write_text(_json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, out_path)
+        except Exception as e:
+            print(f"[V2 PIPELINE] relevance_ledger persist fallito: {e}")
+
     # ── Costruisci documents finali per analyze ─────────────────────────
     # Includiamo tutti i file con extracted_text non vuoto:
     # PDF nativi + OCR PDF + non-PDF (Word, Excel, ecc.)
+    # Esclusi: file in skipped_filenames (Leva 2 Fase B).
     documents = []
     for f in (triaged.get("native_text", []) + needs_ocr_files + non_pdf_with_text):
+        if f["filename"] in skipped_filenames:
+            continue
         text = (f.get("extracted_text") or "").strip()
         if text:
             documents.append({
