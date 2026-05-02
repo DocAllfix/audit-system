@@ -65,13 +65,18 @@ def _strip_yaml_fences(text: str) -> str:
     return cleaned.strip()
 
 
-def _safe_load_yaml(text: str) -> Any:
+def _safe_load_yaml(text: str, batch_id: str = "") -> Any:
     """
     yaml.safe_load tollerante con auto-recovery su errori comuni:
     1. Tentativo standard
     2. Se fallisce per block-scalar mal indentato (tabelle Markdown
        all'interno di campi YAML), tenta sanitization e riprova
     3. Se ancora fallisce → None
+
+    Quando il parsing fallisce a tutti i livelli, il batch viene tracciato
+    in `_LAST_PARSE_FAILURES` con identificatore + prima riga + errore,
+    così il chiamante può recuperare l'informazione invece di scoprire
+    "in silenzio" che un batch è scomparso (Leva 3).
     """
     if not HAS_YAML or not text:
         return None
@@ -97,8 +102,40 @@ def _safe_load_yaml(text: str) -> Any:
         except Exception:
             pass
 
-    print(f"[V2 YAML] safe_load fallito definitivamente: {first_err}")
+    # Fallimento definitivo — registra (mai eccezione)
+    first_line = (text.split("\n", 1)[0] or "").strip()[:160]
+    err_msg = str(first_err)[:200]
+    label = batch_id or "<unknown>"
+    print(
+        f"[V2 YAML] safe_load fallito su batch {label}: {err_msg} "
+        f"(prima riga: {first_line!r})"
+    )
+    try:
+        _LAST_PARSE_FAILURES.append({
+            "batch_id": batch_id,
+            "error": err_msg,
+            "first_line": first_line,
+            "size_chars": len(text),
+        })
+    except Exception:
+        pass
     return None
+
+
+# Buffer in-process delle ultime failure di parsing. Volutamente semplice
+# (lista globale) — il chiamante è responsabile di leggerla / svuotarla
+# all'inizio di ogni invocazione di `parse_aggregated_yaml`.
+_LAST_PARSE_FAILURES: List[Dict[str, Any]] = []
+
+
+def get_last_parse_failures() -> List[Dict[str, Any]]:
+    """Ritorna copia delle failure registrate dall'ultima invocazione di parse."""
+    return list(_LAST_PARSE_FAILURES)
+
+
+def _reset_parse_failures() -> None:
+    """Svuota il buffer failure. Chiamato all'inizio di parse_aggregated_yaml."""
+    _LAST_PARSE_FAILURES.clear()
 
 
 def _sanitize_markdown_tables_in_yaml(text: str) -> str:
@@ -354,6 +391,11 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
 
         Se input vuoto o totalmente malformato, ritorna stub con sezioni vuote.
     """
+    # Resetta sempre il buffer failure all'inizio (Leva 3): il chiamante
+    # potrà leggere `get_last_parse_failures()` per sapere quali batch
+    # sono stati saltati.
+    _reset_parse_failures()
+
     if not text or not HAS_YAML:
         return {"meta": {"azienda": {}, "indice": [], "audit": {}}, "sezioni": []}
 
@@ -365,11 +407,11 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
     # (un batch corrotto non blocca il parsing degli altri)
     chunks = _split_by_separator(cleaned)
     documents: List[Any] = []
-    for chunk in chunks:
+    for chunk_idx, chunk in enumerate(chunks):
         chunk = chunk.strip()
         if not chunk:
             continue
-        d = _safe_load_yaml(chunk)
+        d = _safe_load_yaml(chunk, batch_id=f"chunk_{chunk_idx:03d}")
         if isinstance(d, dict):
             documents.append(d)
 

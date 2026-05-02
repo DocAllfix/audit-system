@@ -182,8 +182,10 @@ def analyze_batch_streaming(
     user_prompt = _sanitize_text(user_prompt)
 
     last_error: Optional[str] = None
+    batch_label = f"batch_{batch_idx:03d}"
 
-    for attempt in range(MAX_STREAM_RETRIES + 1 if enable_retry else 1):
+    max_attempts = MAX_STREAM_RETRIES + 1 if enable_retry else 1
+    for attempt in range(max_attempts):
         try:
             return _do_streaming_call(
                 client=client,
@@ -193,22 +195,50 @@ def analyze_batch_streaming(
                 buf=buf,
                 parser=parser,
                 meter_session_id=meter_session_id,
+                batch_id=batch_label,
+                retry_count=attempt,
             )
         except _StreamRetryable as e:
             last_error = str(e)
             print(
                 f"[V2 STREAM] Batch {batch_idx} interrotto ({last_error}), "
-                f"retry {attempt+1}/{MAX_STREAM_RETRIES + 1}"
+                f"retry {attempt+1}/{max_attempts}"
             )
             # Per retry creiamo nuovo buffer/parser per non duplicare token
             parser = YamlStreamParser(on_marker=on_marker)
             buf = StreamBuffer(max_chars=max_chars, on_chunk=buffer_on_chunk)
             time.sleep(2.0)
         except Exception as e:
-            # Errore non-retryable
+            # Errore non-retryable: registra in meter (Leva 3) e ritorna
+            if meter_session_id:
+                try:
+                    from v2 import token_meter
+                    token_meter.record_call(
+                        session_id=meter_session_id,
+                        model=ANALYZE_MODEL,
+                        kind="analyze",
+                        retry_count=attempt,
+                        error=f"non_retryable: {e}",
+                        batch_id=batch_label,
+                    )
+                except Exception:
+                    pass
             return buf.finalize(error=f"non_retryable: {e}")
 
-    # Tutti i retry falliti: ritorniamo il buffer parziale (o vuoto)
+    # Tutti i retry falliti: registriamo in meter e ritorniamo il parziale
+    if meter_session_id:
+        try:
+            from v2 import token_meter
+            token_meter.record_call(
+                session_id=meter_session_id,
+                model=ANALYZE_MODEL,
+                kind="analyze",
+                retry_count=max_attempts - 1,
+                error=f"all_retries_failed: {last_error}",
+                batch_id=batch_label,
+            )
+        except Exception:
+            pass
     return buf.finalize(error=f"all_retries_failed: {last_error}")
 
 
@@ -225,12 +255,18 @@ def _do_streaming_call(
     buf: StreamBuffer,
     parser: YamlStreamParser,
     meter_session_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    retry_count: int = 0,
 ) -> StreamResult:
     """
     Esegue una singola chiamata streaming. Solleva _StreamRetryable su errori
     transitori (network, 503), ritorna StreamResult finalizzato altrimenti.
+
+    `batch_id` e `retry_count` (Leva 3) finiscono nel token_meter quando
+    presente, così il debug post-mortem ha contesto per call.
     """
     from google.genai import types as gtypes
+    call_start = time.monotonic()
 
     # Costruisce config: se cached_content_id presente, usa cache; altrimenti
     # usa system_instruction inline come fallback.
@@ -282,12 +318,19 @@ def _do_streaming_call(
 
         # Stream completato normalmente
         parser.finalize()
+        duration = round(time.monotonic() - call_start, 3)
         # Token metering opzionale (Fase 7.5): usage_metadata arriva nell'ultimo chunk
-        if meter_session_id and last_chunk is not None:
+        if meter_session_id:
             try:
                 from v2 import token_meter
                 token_meter.record_from_response(
-                    meter_session_id, last_chunk, ANALYZE_MODEL, kind="analyze"
+                    meter_session_id,
+                    last_chunk,
+                    ANALYZE_MODEL,
+                    kind="analyze",
+                    duration_seconds=duration,
+                    retry_count=retry_count,
+                    batch_id=batch_id,
                 )
             except Exception as e:
                 print(f"[V2 STREAM] meter record fallito: {e}")
@@ -302,6 +345,22 @@ def _do_streaming_call(
             raise _StreamRetryable(str(e)) from e
         # Auth o config error → no retry, ritorna parziale con errore
         parser.finalize()
+        duration = round(time.monotonic() - call_start, 3)
+        if meter_session_id:
+            try:
+                from v2 import token_meter
+                token_meter.record_from_response(
+                    meter_session_id,
+                    None,
+                    ANALYZE_MODEL,
+                    kind="analyze",
+                    duration_seconds=duration,
+                    retry_count=retry_count,
+                    error=f"stream_error: {e}",
+                    batch_id=batch_id,
+                )
+            except Exception:
+                pass
         return buf.finalize(error=f"stream_error: {e}")
     finally:
         # Best-effort cleanup dello stream se ha .close()

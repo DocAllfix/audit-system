@@ -20,6 +20,7 @@ API pubblica:
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -71,13 +72,28 @@ class OCRResult:
 # Inferenza singola (1 file_uri → testo)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _maybe_record_meter(response, model: str, meter_session_id: Optional[str]) -> None:
+def _maybe_record_meter(
+    response,
+    model: str,
+    meter_session_id: Optional[str],
+    duration_seconds: float = 0.0,
+    error: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> None:
     """Registra token usage se session_id fornito. Mai eccezione."""
     if not meter_session_id:
         return
     try:
         from v2 import token_meter
-        token_meter.record_from_response(meter_session_id, response, model, kind="ocr")
+        token_meter.record_from_response(
+            meter_session_id,
+            response,
+            model,
+            kind="ocr",
+            duration_seconds=duration_seconds,
+            error=error,
+            batch_id=batch_id,
+        )
     except Exception as e:
         print(f"[V2 OCR] meter record fallito: {e}")
 
@@ -88,11 +104,13 @@ def _infer_with_uri(
     mime_type: str,
     model: str = OCR_MODEL_PRIMARY,
     meter_session_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Esegue 1 chiamata Gemini Vision usando Part.from_uri.
     Ritorna il testo estratto o None se l'inferenza fallisce.
     """
+    call_start = time.monotonic()
     try:
         from google.genai import types as gtypes
 
@@ -117,7 +135,11 @@ def _infer_with_uri(
             contents=contents,
             config=config,
         )
-        _maybe_record_meter(response, model, meter_session_id)
+        duration = round(time.monotonic() - call_start, 3)
+        _maybe_record_meter(
+            response, model, meter_session_id,
+            duration_seconds=duration, batch_id=batch_id,
+        )
 
         text = getattr(response, "text", None) or ""
         text = text.strip()
@@ -125,6 +147,13 @@ def _infer_with_uri(
             text = text[:MAX_OCR_OUTPUT_CHARS] + "\n[OCR TRONCATO PER ECCESSO LUNGHEZZA]"
         return text or None
     except Exception as e:
+        duration = round(time.monotonic() - call_start, 3)
+        _maybe_record_meter(
+            None, model, meter_session_id,
+            duration_seconds=duration,
+            error=f"ocr_inference: {e}",
+            batch_id=batch_id,
+        )
         print(f"[V2 OCR] Inferenza fallita su uri={file_uri[:60]}: {e}")
         return None
 
@@ -166,14 +195,15 @@ def _ocr_single_file(
     from v2.file_uploader import guess_mime_type
     mime = guess_mime_type(path)
 
+    batch_label = filename[:80] if filename else None
     text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_PRIMARY,
-                            meter_session_id=meter_session_id)
+                            meter_session_id=meter_session_id, batch_id=batch_label)
     method = "files_api_native"
 
     # 3) Fallback al modello lite se primario non produce testo
     if not text:
         text = _infer_with_uri(client, upload_result.file_uri, mime, OCR_MODEL_FALLBACK,
-                                meter_session_id=meter_session_id)
+                                meter_session_id=meter_session_id, batch_id=batch_label)
         method = "files_api_native_fallback"
 
     if not text:

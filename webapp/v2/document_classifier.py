@@ -159,13 +159,23 @@ def _maybe_record_meter(
     model: str,
     kind: str,
     meter_session_id: Optional[str] = None,
+    duration_seconds: float = 0.0,
+    retry_count: int = 0,
+    error: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> None:
     """Registra token usage se meter_session_id fornito. Mai eccezione."""
     if not meter_session_id:
         return
     try:
         from v2 import token_meter
-        token_meter.record_from_response(meter_session_id, response, model, kind=kind)
+        token_meter.record_from_response(
+            meter_session_id, response, model, kind=kind,
+            duration_seconds=duration_seconds,
+            retry_count=retry_count,
+            error=error,
+            batch_id=batch_id,
+        )
     except Exception as e:
         print(f"[V2 CLASSIFIER] meter record fallito: {e}")
 
@@ -175,6 +185,7 @@ def _call_classifier_api(
     model: str,
     user_prompt: str,
     meter_session_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> Optional[ClassificationBatchOutput]:
     """
     Chiama Gemini con response_schema strutturato.
@@ -201,15 +212,22 @@ def _call_classifier_api(
 
     last_err: Optional[Exception] = None
     for attempt in range(MAX_RETRIES + 1):
+        call_start = time.monotonic()
         try:
             response = client.models.generate_content(
                 model=model,
                 contents=user_prompt,
                 config=config,
             )
-            # Token metering opzionale (Fase 7.5)
-            _maybe_record_meter(response, model, kind="classify",
-                                 meter_session_id=meter_session_id)
+            duration = round(time.monotonic() - call_start, 3)
+            # Token metering opzionale (Fase 7.5 + Leva 3)
+            _maybe_record_meter(
+                response, model, kind="classify",
+                meter_session_id=meter_session_id,
+                duration_seconds=duration,
+                retry_count=attempt,
+                batch_id=batch_id,
+            )
             # Il SDK con response_schema espone la risposta parsata in `response.parsed`
             parsed = getattr(response, "parsed", None)
             if isinstance(parsed, ClassificationBatchOutput):
@@ -221,10 +239,21 @@ def _call_classifier_api(
             return None
         except Exception as e:
             last_err = e
+            duration = round(time.monotonic() - call_start, 3)
             if attempt < MAX_RETRIES:
                 wait = RETRY_BASE_DELAY * (2 ** attempt)
                 print(f"[V2 CLASSIFIER] Tentativo {attempt+1}/{MAX_RETRIES+1} fallito ({e}), retry tra {wait}s")
                 time.sleep(wait)
+            else:
+                # Ultimo tentativo fallito: registra l'errore (Leva 3)
+                _maybe_record_meter(
+                    None, model, kind="classify",
+                    meter_session_id=meter_session_id,
+                    duration_seconds=duration,
+                    retry_count=attempt,
+                    error=f"classify_call_failed: {e}",
+                    batch_id=batch_id,
+                )
     print(f"[V2 CLASSIFIER] Tutti i tentativi falliti: {last_err}")
     return None
 
@@ -261,7 +290,8 @@ def _double_check_low_confidence(
 
     user_prompt = _build_user_prompt(files_to_recheck)
     result = _call_classifier_api(client, MODEL_STAGE2, user_prompt,
-                                    meter_session_id=meter_session_id)
+                                    meter_session_id=meter_session_id,
+                                    batch_id="classify_double_check")
 
     if not result or not result.files:
         # Double-check fallito → mantieni risultati stage 1 (ma marca needs_double_check=True)
@@ -345,8 +375,10 @@ def classify_files_batch(
         batch = files_to_classify[batch_start:batch_start + MAX_BATCH_SIZE]
         batch_files = [b[1] for b in batch]
         user_prompt = _build_user_prompt(batch_files)
+        batch_label = f"classify_stage1_{batch_start:04d}"
         result = _call_classifier_api(client, MODEL_STAGE1, user_prompt,
-                                        meter_session_id=meter_session_id)
+                                        meter_session_id=meter_session_id,
+                                        batch_id=batch_label)
 
         if result is None or not result.files:
             # API fallita → fallback offline per questo batch

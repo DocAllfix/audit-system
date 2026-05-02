@@ -417,3 +417,43 @@ def test_parsing_summary():
     assert summary["sezioni_count"] == 2
     assert summary["documenti_total"] == 2
     assert summary["company"] == "DEMO ALPHA SRL"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Leva 3 — failure di parsing tracciate (no più silenziose)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_parse_failures_buffer_empty_when_all_batches_valid():
+    """Se tutti i batch parsano: buffer failure vuoto a fine call."""
+    aggregated = SAMPLE_BATCH_1 + "\n\n---\n\n" + SAMPLE_BATCH_2
+    yp.parse_aggregated_yaml(aggregated)
+    assert yp.get_last_parse_failures() == []
+
+
+def test_parse_failures_buffer_records_skipped_chunk():
+    """Un chunk YAML invalido deve essere registrato nel buffer failure."""
+    bad_chunk = (
+        "azienda:\n"
+        "  nome: \"BROKEN INC\"\n"
+        "sezioni:\n"
+        "  - nome: 'Sezione X'\n"
+        "    documenti: [{tipo: 'X', titolo: 'Y',\n"  # parentesi non chiusa
+    )
+    aggregated = SAMPLE_BATCH_1 + "\n\n---\n\n" + bad_chunk
+    yp.parse_aggregated_yaml(aggregated)
+    failures = yp.get_last_parse_failures()
+    assert len(failures) == 1
+    f = failures[0]
+    assert "chunk_" in f["batch_id"]
+    assert f["error"]
+    assert f["size_chars"] > 0
+
+
+def test_parse_failures_reset_each_invocation():
+    """Ogni invocazione di parse_aggregated_yaml resetta il buffer failure."""
+    bad_chunk = "tipo: 'X'\nlista: [a, b,\n"
+    yp.parse_aggregated_yaml(bad_chunk)
+    assert len(yp.get_last_parse_failures()) >= 1
+    # Seconda chiamata pulita: failures resettate
+    yp.parse_aggregated_yaml(SAMPLE_BATCH_1)
+    assert yp.get_last_parse_failures() == []

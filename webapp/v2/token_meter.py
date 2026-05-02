@@ -99,6 +99,12 @@ class TokenCall:
     input_tokens: int = 0
     cached_tokens: int = 0
     output_tokens: int = 0
+    # Telemetria estesa (Leva 3): nessun campo è obbligatorio per retro-compat,
+    # ma quando popolati permettono debug per-call senza caricare lo storage
+    duration_seconds: float = 0.0
+    retry_count: int = 0
+    error: Optional[str] = None
+    batch_id: Optional[str] = None
 
 
 @dataclass
@@ -214,6 +220,10 @@ def record_call(
     cached_tokens: int = 0,
     output_tokens: int = 0,
     kind: str = KIND_OTHER,
+    duration_seconds: float = 0.0,
+    retry_count: int = 0,
+    error: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> bool:
     """
     Registra una chiamata API. Mai solleva eccezione.
@@ -225,6 +235,10 @@ def record_call(
         cached_tokens: cached_content_token_count (sottoinsieme di input)
         output_tokens: candidates_token_count
         kind: categoria d'uso (classify/analyze/ocr/embedding/other)
+        duration_seconds: tempo wall-clock della singola call (Leva 3)
+        retry_count: numero retry effettuati (0 = primo tentativo riuscito)
+        error: stringa breve d'errore se la call non è andata a buon fine
+        batch_id: identificatore opzionale del batch/file (debug per-call)
 
     Returns:
         True se registrato, False se input invalido.
@@ -240,6 +254,8 @@ def record_call(
     output_tokens = max(0, int(output_tokens or 0))
     # cached_tokens non può eccedere input_tokens (vincolo Gemini)
     cached_tokens = min(cached_tokens, input_tokens)
+    duration_seconds = max(0.0, float(duration_seconds or 0.0))
+    retry_count = max(0, int(retry_count or 0))
 
     call = TokenCall(
         model=_normalize_model_name(model),
@@ -247,6 +263,10 @@ def record_call(
         input_tokens=input_tokens,
         cached_tokens=cached_tokens,
         output_tokens=output_tokens,
+        duration_seconds=round(duration_seconds, 3),
+        retry_count=retry_count,
+        error=(str(error)[:200] if error else None),
+        batch_id=(str(batch_id)[:100] if batch_id else None),
     )
 
     with _get_session_lock(session_id):
@@ -261,16 +281,45 @@ def record_from_response(
     response: Any,
     model: str,
     kind: str = KIND_OTHER,
+    duration_seconds: float = 0.0,
+    retry_count: int = 0,
+    error: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> bool:
     """
     Estrae automaticamente i token da `response.usage_metadata` del SDK genai.
     Tollerante: se i campi non ci sono, registra 0 (mai eccezione).
+
+    I parametri di telemetria estesa (duration/retry/error/batch_id) sono
+    opzionali e non incidono sul calcolo dei token.
     """
     if response is None:
+        # Anche senza response, se ci hanno passato un errore lo registriamo
+        if error or duration_seconds > 0:
+            return record_call(
+                session_id=session_id,
+                model=model,
+                kind=kind,
+                duration_seconds=duration_seconds,
+                retry_count=retry_count,
+                error=error,
+                batch_id=batch_id,
+            )
         return False
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
-        # Alcuni stream chunk non hanno usage_metadata: non è un errore
+        # Alcuni stream chunk non hanno usage_metadata: non è un errore.
+        # Se però c'è telemetria extra, la registriamo comunque.
+        if error or duration_seconds > 0:
+            return record_call(
+                session_id=session_id,
+                model=model,
+                kind=kind,
+                duration_seconds=duration_seconds,
+                retry_count=retry_count,
+                error=error,
+                batch_id=batch_id,
+            )
         return False
 
     try:
@@ -287,6 +336,10 @@ def record_from_response(
         cached_tokens=cached,
         output_tokens=out_t,
         kind=kind,
+        duration_seconds=duration_seconds,
+        retry_count=retry_count,
+        error=error,
+        batch_id=batch_id,
     )
 
 
@@ -316,6 +369,10 @@ def compute_session_report(meter: SessionMeter) -> Dict[str, Any]:
             "total_input": 0, "total_cached": 0, "total_output": 0,
             "total_cost_usd": 0.0, "total_cost_eur": 0.0,
             "saved_by_caching_usd": 0.0,
+            "total_duration_seconds": 0.0,
+            "total_retries": 0,
+            "errors_count": 0,
+            "errors_sample": [],
             "by_model": {},
             "by_kind": {},
         }
@@ -325,6 +382,9 @@ def compute_session_report(meter: SessionMeter) -> Dict[str, Any]:
     total_in = total_cached = total_out = 0
     total_cost_usd = 0.0
     saved_by_caching_usd = 0.0
+    total_duration = 0.0
+    total_retries = 0
+    errors_sample: List[Dict[str, Any]] = []
 
     for call in meter.calls:
         cost_usd = compute_cost_usd(
@@ -340,32 +400,57 @@ def compute_session_report(meter: SessionMeter) -> Dict[str, Any]:
         total_cached += call.cached_tokens
         total_out += call.output_tokens
         total_cost_usd += cost_usd
+        total_duration += call.duration_seconds
+        total_retries += call.retry_count
+        if call.error:
+            if len(errors_sample) < 20:
+                errors_sample.append({
+                    "kind": call.kind,
+                    "model": call.model,
+                    "batch_id": call.batch_id,
+                    "retry_count": call.retry_count,
+                    "duration_seconds": call.duration_seconds,
+                    "error": call.error,
+                })
 
         # by_model
         m = by_model.setdefault(call.model, {
             "calls": 0, "input": 0, "cached": 0, "output": 0, "cost_usd": 0.0,
+            "duration_seconds": 0.0, "retries": 0, "errors": 0,
         })
         m["calls"] += 1
         m["input"] += call.input_tokens
         m["cached"] += call.cached_tokens
         m["output"] += call.output_tokens
         m["cost_usd"] += cost_usd
+        m["duration_seconds"] += call.duration_seconds
+        m["retries"] += call.retry_count
+        if call.error:
+            m["errors"] += 1
 
         # by_kind
         k = by_kind.setdefault(call.kind, {
             "calls": 0, "input": 0, "cached": 0, "output": 0, "cost_usd": 0.0,
+            "duration_seconds": 0.0, "retries": 0, "errors": 0,
         })
         k["calls"] += 1
         k["input"] += call.input_tokens
         k["cached"] += call.cached_tokens
         k["output"] += call.output_tokens
         k["cost_usd"] += cost_usd
+        k["duration_seconds"] += call.duration_seconds
+        k["retries"] += call.retry_count
+        if call.error:
+            k["errors"] += 1
 
-    # Aggiungi cost_eur ai breakdowns
+    # Aggiungi cost_eur + arrotonda durations ai breakdowns
     for d in (by_model, by_kind):
         for v in d.values():
             v["cost_eur"] = round(v["cost_usd"] * USD_TO_EUR, 5)
             v["cost_usd"] = round(v["cost_usd"], 5)
+            v["duration_seconds"] = round(v["duration_seconds"], 2)
+
+    errors_count = sum(1 for c in meter.calls if c.error)
 
     return {
         "session_id": meter.session_id,
@@ -377,6 +462,10 @@ def compute_session_report(meter: SessionMeter) -> Dict[str, Any]:
         "total_cost_eur": round(total_cost_usd * USD_TO_EUR, 5),
         "saved_by_caching_usd": round(saved_by_caching_usd, 5),
         "saved_by_caching_eur": round(saved_by_caching_usd * USD_TO_EUR, 5),
+        "total_duration_seconds": round(total_duration, 2),
+        "total_retries": total_retries,
+        "errors_count": errors_count,
+        "errors_sample": errors_sample,
         "by_model": by_model,
         "by_kind": by_kind,
     }
@@ -395,6 +484,10 @@ def get_session_report(session_id: str) -> Dict[str, Any]:
                 "calls_count": 0,
                 "total_input": 0, "total_cached": 0, "total_output": 0,
                 "total_cost_usd": 0.0, "total_cost_eur": 0.0,
+                "total_duration_seconds": 0.0,
+                "total_retries": 0,
+                "errors_count": 0,
+                "errors_sample": [],
                 "by_model": {}, "by_kind": {},
             }
         return compute_session_report(meter)

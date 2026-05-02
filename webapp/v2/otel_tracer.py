@@ -20,9 +20,13 @@ API:
 """
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
+
+
+_logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -117,11 +121,12 @@ def otel_span(name: str, attributes: Optional[Dict[str, Any]] = None):
                 for k, v in attributes.items():
                     try:
                         span.set_attribute(k, v)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _logger.debug("OTEL set_attribute drop %s=%r: %s", k, v, e)
             yield span
-    except Exception:
+    except Exception as e:
         # Mai propagare errori del tracing al codice di business
+        _logger.debug("OTEL span %s drop: %s", name, e)
         yield None
 
 
@@ -134,5 +139,5 @@ def add_event(span_name: str, attributes: Optional[Dict[str, Any]] = None) -> No
         if span is None:
             return
         span.add_event(span_name, attributes=attributes or {})
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("OTEL add_event %s drop: %s", span_name, e)

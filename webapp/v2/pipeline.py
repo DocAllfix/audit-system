@@ -142,7 +142,11 @@ def process_zip_v2(
     from v2.schemas.events import (
         DoneEvent, ErrorKind, PipelinePhase,
     )
-    from v2.yaml_parser import extract_company_name, parse_aggregated_yaml
+    from v2.yaml_parser import (
+        extract_company_name,
+        get_last_parse_failures,
+        parse_aggregated_yaml,
+    )
     from v2.zip_extractor import (
         cleanup_extraction, extract_summary, extract_zip_bytes,
     )
@@ -374,6 +378,25 @@ def process_zip_v2(
     full_yaml = "\n\n---\n\n".join(raw_yamls)
     parsed_data = parse_aggregated_yaml(full_yaml)
     company_name = extract_company_name(parsed_data)
+
+    # Leva 3 — segnala batch persi durante il parse YAML (errori non più
+    # silenziosi). Ogni batch fallito diventa un evento PARSE_FAILED con
+    # batch_id e prima riga.
+    parse_failures = get_last_parse_failures()
+    for failure in parse_failures:
+        try:
+            emitter.emit_error(
+                ErrorKind.PARSE_FAILED,
+                f"yaml_batch_skipped: {failure.get('batch_id')} → "
+                f"{failure.get('error')}",
+            )
+        except Exception:
+            pass
+    if parse_failures:
+        print(
+            f"[V2 PIPELINE] {len(parse_failures)} batch YAML saltati "
+            f"durante l'aggregazione (vedi eventi PARSE_FAILED)"
+        )
 
     # ── FASE: docx_build (Fase 7) ────────────────────────────────────────
     phase_start = time.monotonic()

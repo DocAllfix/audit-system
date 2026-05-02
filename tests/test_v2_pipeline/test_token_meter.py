@@ -331,3 +331,111 @@ def test_reset_all_sessions_clears_global():
     tm.reset_all_sessions()
     assert tm.get_session_report("a")["calls_count"] == 0
     assert tm.get_session_report("b")["calls_count"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Leva 3 — telemetria estesa per call (duration, retry, error, batch_id)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_record_call_persists_extended_telemetry():
+    """duration/retry/error/batch_id devono comparire nel report."""
+    tm.record_call(
+        "sess_tel", "gemini-2.5-flash",
+        input_tokens=100, cached_tokens=0, output_tokens=50,
+        kind="analyze",
+        duration_seconds=12.345, retry_count=1,
+        error=None, batch_id="batch_007",
+    )
+    report = tm.get_session_report("sess_tel")
+    assert report["calls_count"] == 1
+    assert report["total_duration_seconds"] == pytest.approx(12.34, abs=0.02)
+    assert report["total_retries"] == 1
+    assert report["errors_count"] == 0
+    assert report["errors_sample"] == []
+    by_kind = report["by_kind"]["analyze"]
+    assert by_kind["duration_seconds"] == pytest.approx(12.34, abs=0.02)
+    assert by_kind["retries"] == 1
+    assert by_kind["errors"] == 0
+
+
+def test_record_call_with_error_appears_in_sample():
+    """Una call con errore deve incrementare errors_count e finire nel sample."""
+    tm.record_call(
+        "sess_err", "gemini-2.5-flash",
+        kind="analyze",
+        duration_seconds=2.0, retry_count=2,
+        error="non_retryable: 503 service unavailable",
+        batch_id="batch_042",
+    )
+    report = tm.get_session_report("sess_err")
+    assert report["errors_count"] == 1
+    assert len(report["errors_sample"]) == 1
+    sample = report["errors_sample"][0]
+    assert sample["batch_id"] == "batch_042"
+    assert sample["retry_count"] == 2
+    assert "503" in sample["error"]
+
+
+def test_record_from_response_with_none_records_error_only():
+    """response=None ma error fornito: la call deve essere registrata come errore."""
+    ok = tm.record_from_response(
+        "sess_n", None, "gemini-2.5-flash",
+        kind="analyze",
+        duration_seconds=1.5,
+        error="stream_error: timeout",
+        batch_id="batch_009",
+    )
+    assert ok is True
+    report = tm.get_session_report("sess_n")
+    assert report["calls_count"] == 1
+    assert report["errors_count"] == 1
+    # Token a 0 perché non c'è response
+    assert report["total_input"] == 0
+    assert report["total_output"] == 0
+
+
+def test_record_from_response_no_telemetry_no_record_when_none():
+    """response=None senza error/duration → comportamento legacy: non registrare."""
+    ok = tm.record_from_response("sess_skip", None, "gemini-2.5-flash", kind="analyze")
+    assert ok is False
+    assert tm.get_session_report("sess_skip")["calls_count"] == 0
+
+
+def test_errors_sample_capped_at_20():
+    """errors_sample non deve crescere indefinitamente."""
+    for i in range(30):
+        tm.record_call(
+            "sess_many", "gemini-2.5-flash",
+            kind="analyze",
+            error=f"err_{i}",
+            batch_id=f"b_{i:03d}",
+        )
+    report = tm.get_session_report("sess_many")
+    assert report["errors_count"] == 30
+    assert len(report["errors_sample"]) == 20
+
+
+def test_record_call_clamps_negative_duration_and_retry():
+    """duration < 0 → 0, retry < 0 → 0."""
+    tm.record_call(
+        "sess_clamp", "gemini-2.5-flash",
+        kind="analyze",
+        duration_seconds=-1.0, retry_count=-3,
+    )
+    report = tm.get_session_report("sess_clamp")
+    assert report["total_duration_seconds"] == 0.0
+    assert report["total_retries"] == 0
+
+
+def test_error_string_truncated_to_200_chars():
+    """error stringa molto lunga deve essere troncata a 200 char."""
+    long_err = "x" * 500
+    tm.record_call(
+        "sess_long", "gemini-2.5-flash",
+        kind="analyze",
+        error=long_err,
+        batch_id="b1",
+    )
+    report = tm.get_session_report("sess_long")
+    sample = report["errors_sample"][0]
+    assert len(sample["error"]) <= 200
