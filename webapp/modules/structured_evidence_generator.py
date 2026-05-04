@@ -178,7 +178,8 @@ def generate_structured_evidence_docx(
     parsed_data: Dict,
     output_path: str,
     docs_estratti: int = 0,
-    docs_vuoti: int = 0
+    docs_vuoti: int = 0,
+    failed_files: list = None
 ) -> str:
     """
     Genera il file .docx strutturato a partire dal dict del parser YAML.
@@ -487,6 +488,51 @@ def generate_structured_evidence_docx(
                 # Comportamento standard
                 for doc_entry in group:
                     _render_doc_detail(doc, doc_entry)
+
+    # ==================================================================
+    # SEZIONE: DOCUMENTI NON ELABORATI (se presenti)
+    # ==================================================================
+    if failed_files:
+        # Mappa categoria errore → descrizione user-friendly
+        REASON_LABELS = {
+            "extraction_failed": "Estrazione testo fallita",
+            "ocr_failed":         "OCR fallito (testo insufficiente)",
+            "ocr_recovery_failed":"OCR fallito anche dopo recovery",
+            "ocr_unavailable":    "OCR non disponibile (servizio non raggiungibile)",
+            "ocr_timeout":        "OCR oltre il tempo limite (file probabilmente troppo pesante)",
+            "unsupported_format": "Formato non supportato",
+            "ai_error":           "Errore AI durante l'analisi",
+        }
+
+        doc.add_heading("DOCUMENTI NON ELABORATI", level=1)
+
+        intro = doc.add_paragraph(
+            "I file elencati di seguito non sono stati inclusi nel report. "
+            "Verificare manualmente il loro contenuto se necessario per l'audit."
+        )
+        intro.runs[0].italic = True
+
+        # Raggruppa per categoria di errore
+        from collections import OrderedDict as _OD2
+        groups = _OD2()
+        for ff in failed_files:
+            t = ff.get("type", "unknown")
+            groups.setdefault(t, []).append(ff)
+
+        for ftype, items in groups.items():
+            label = REASON_LABELS.get(ftype, ftype)
+            doc.add_heading(f"{label} ({len(items)})", level=2)
+
+            ftbl = doc.add_table(rows=1 + len(items), cols=2)
+            ftbl.style = "Table Grid"
+            hdr = ftbl.rows[0].cells
+            hdr[0].text = "File"
+            hdr[1].text = "Motivo"
+            for i, ff in enumerate(items, start=1):
+                row = ftbl.rows[i].cells
+                row[0].text = ff.get("relative_path") or ff.get("filename", "?")
+                row[1].text = str(ff.get("reason", ""))[:200]
+            doc.add_paragraph()
 
     # ==================================================================
     # SALVA FILE

@@ -604,9 +604,9 @@ def _pipeline_strutturata(
     total_docs_count = len(documents)
 
     # ── A: Esecuzione parallela batch ──────────────────────────────────────
-    # 5 worker su chiave a pagamento (gemini-2.5-flash: 1000 RPM pagamento).
-    # min(5, num_batches) evita thread inutili su ZIP piccoli (<5 batch).
-    MAX_STRUCTURED_WORKERS = min(5, num_batches)
+    # 7 worker allineati al semaforo gemini_structured_slot (cap reale 7).
+    # min(7, num_batches) evita thread inutili su ZIP piccoli.
+    MAX_STRUCTURED_WORKERS = min(7, num_batches)
 
     # Preallochiamo la lista con None per preservare l'ordine dei batch
     # indipendentemente dall'ordine di completamento dei thread.
@@ -735,7 +735,10 @@ def _pipeline_strutturata(
         tmp_path = tmp.name
 
     try:
-        generate_structured_evidence_docx(parsed_data, tmp_path, docs_estratti, docs_vuoti)
+        generate_structured_evidence_docx(
+            parsed_data, tmp_path, docs_estratti, docs_vuoti,
+            failed_files=failed_files
+        )
         with open(tmp_path, 'rb') as f:
             word_bytes = f.read()
     finally:
@@ -1302,14 +1305,21 @@ def extract_text_from_files_with_logging(files: List[Dict], progress_callback=No
             """Processa un singolo file con OCR."""
             try:
                 filepath = file_info["path"]
-                # Max pagine aumentato a 12 grazie all'ottimizzazione 1024px
-                content, method = gemini_ocr.extract_text_from_pdf(filepath, max_pages=8)
+                file_size = file_info.get("size", 0)
+                # max_pages adattivo: file grandi ottengono più pagine per coprire contenuto critico
+                if file_size > 5_000_000:
+                    max_p = 12
+                elif file_size > 2_000_000:
+                    max_p = 10
+                else:
+                    max_p = 8
+                content, method = gemini_ocr.extract_text_from_pdf(filepath, max_pages=max_p)
                 return file_info["filename"], content, None
             except Exception as e:
                 return file_info["filename"], "", str(e)
         
         # OCR PARALLELO con MAX_OCR_WORKERS worker e TIMEOUT
-        OCR_TIMEOUT_INACTIVITY = 60 # Timeout inattività aumentato a 60s per tollerare file lenti
+        OCR_TIMEOUT_INACTIVITY = 180  # Timeout inattività: 3min per tollerare burst di file grandi senza zombie cascade
         
         with ThreadPoolExecutor(max_workers=MAX_OCR_WORKERS) as executor:
             # Mappa future -> file_info

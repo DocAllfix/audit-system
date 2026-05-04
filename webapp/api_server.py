@@ -458,7 +458,41 @@ async def process_report(
             queue.put({"pct": pct, "msg": msg}), loop
         )
 
+    # ── PRE-FLIGHT: analisi ZIP per warning early ────────────────────────────
+    # Counto file e stimo tempi prima di iniziare il processing pesante.
+    # Errori silenziosi: se la validazione fallisce, non blocchiamo niente.
+    preflight_warnings = []
+    try:
+        import zipfile as _zf
+        from io import BytesIO as _BIO
+        with _zf.ZipFile(_BIO(file_bytes)) as zfp:
+            file_count = sum(1 for n in zfp.namelist() if not n.endswith("/"))
+        size_mb = len(file_bytes) / (1024 * 1024)
+
+        if size_mb > 200:
+            preflight_warnings.append(
+                f"ZIP molto grande ({size_mb:.0f} MB). Tempo di elaborazione stimato: "
+                f"{int(size_mb * 0.4)}-{int(size_mb * 0.7)} minuti. "
+                f"Per stabilità ottimale, considera di splittare in 2 batch."
+            )
+        if file_count > 200:
+            preflight_warnings.append(
+                f"Molti file ({file_count}). Possibili rallentamenti su file con immagini scansionate."
+            )
+        if size_mb > 300 or file_count > 300:
+            preflight_warnings.append(
+                "ATTENZIONE: dimensioni elevate aumentano il rischio di timeout. "
+                "Se l'elaborazione fallisce, splitta lo ZIP."
+            )
+    except Exception as _exc:
+        # Non blocchiamo mai per fallimenti pre-flight
+        logger.debug(f"[Tab1] preflight skipped: {_exc}")
+
     async def event_stream():
+        # Pubblica warnings pre-flight come primo evento (se presenti)
+        if preflight_warnings:
+            yield f"data: {json.dumps({'preflight_warnings': preflight_warnings}, ensure_ascii=False)}\n\n"
+
         def _run():
             return process_zip_and_generate_report(
                 input_source=file_bytes,
@@ -503,6 +537,24 @@ async def process_report(
                     pass
 
                 logger.info(f"[Tab1] OK → {filename} ({len(word_bytes)//1024} KB)")
+
+                # Evento summary se ci sono file falliti (frontend può mostrarli prima del download)
+                ff = stats.get("failed_files") or []
+                if ff:
+                    summary = {
+                        "summary": True,
+                        "files_total": stats.get("total_docs", 0),
+                        "files_processed": stats.get("docs_with_text", 0),
+                        "files_failed": len(ff),
+                        "failed_breakdown": [
+                            {"filename": f.get("filename"),
+                             "type": f.get("type", "unknown"),
+                             "reason": str(f.get("reason", ""))[:200]}
+                            for f in ff[:50]   # cap a 50 per non gonfiare payload
+                        ],
+                    }
+                    yield f"data: {json.dumps(summary, ensure_ascii=False)}\n\n"
+
                 done_event = {
                     "done": True,
                     "filename": filename,
@@ -530,6 +582,222 @@ async def process_report(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PIPELINE V2 (Metodo A — Triage Funnel) — endpoint isolato per testing
+# Vedi docs/V2_EXECUTION_TRACKER.md
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/v2/health")
+async def v2_health():
+    """Health check del namespace V2 (Fase 0). Non richiede auth."""
+    from v2.pipeline import process_v2_stub
+    return process_v2_stub()
+
+
+
+@app.post("/api/v2/report/process")
+async def v2_process_report(
+    file: UploadFile = File(...),
+    dry_run: bool = False,
+    legacy_events: bool = False,
+    user: Dict = Depends(_get_current_user),
+):
+    """
+    Endpoint V2 reale (Fase 8). Streaming SSE typed events.
+
+    Query params:
+        dry_run=true → nessuna chiamata Gemini (testing senza consumare token)
+        legacy_events=true → eventi tradotti in formato V1 `{pct, msg}`
+                              per compatibilità con frontend V1 esistente
+
+    Body: multipart/form-data con `file` ZIP.
+
+    Auth: come V1.
+
+    Stream eventi SSE typed (vedi v2/schemas/events.py): session.start, phase.*,
+    file.*, llm.token, error, heartbeat, done.
+    Con legacy_events=true: i suddetti vengono tradotti in formato V1.
+    """
+    from v2.legacy_adapter import LegacyAdapter
+    from v2.pipeline import process_zip_v2
+    from v2.progress_store import ProgressStore
+    from v2.schemas.events import PipelinePhase
+    from v2.sse_emitter import SSEEmitter
+    from v2.watchdog import HeartbeatWatchdog
+
+    api_key = GEMINI_API_KEY
+    if not api_key and not dry_run:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY non configurata")
+
+    file_bytes = await file.read()
+
+    if len(file_bytes) > 1 * 1024 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File troppo grande (limite 1 GB)")
+
+    original_filename = file.filename or "upload.zip"
+    username = user["username"]
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + username[:20].replace(" ", "_")
+    logger.info(
+        f"[V2 Tab1] {username} → {original_filename} "
+        f"({len(file_bytes)/1024/1024:.1f} MB) session={session_id} dry_run={dry_run}"
+    )
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+
+    store = ProgressStore(session_id)
+    emitter = SSEEmitter(session_id=session_id, store=store, queue=queue, loop=loop)
+    legacy_adapter = LegacyAdapter() if legacy_events else None
+
+    # Watchdog per heartbeat ogni 5s
+    wd = HeartbeatWatchdog(emitter, interval_seconds=5.0,
+                            get_queue_depth=lambda: queue.qsize())
+
+    def _serialize_event(event_dict):
+        """Serializza evento. Se legacy_events: traduce in formato V1."""
+        if legacy_adapter is None:
+            return SSEEmitter.serialize_for_sse(event_dict)
+        translated = legacy_adapter.translate(event_dict)
+        if translated is None:
+            return None  # evento V2 senza equivalente V1 (es. heartbeat)
+        return SSEEmitter.serialize_for_sse(translated)
+
+    async def event_stream():
+        # Evento iniziale
+        emitter.emit_session_start(
+            user=username,
+            total_size_mb=round(len(file_bytes) / 1024 / 1024, 1),
+            input_kind="zip",
+        )
+
+        wd.start()
+
+        def _run_pipeline():
+            try:
+                return process_zip_v2(
+                    zip_bytes=file_bytes,
+                    session_id=session_id,
+                    api_key=api_key,
+                    emitter=emitter,
+                    dry_run=dry_run,
+                    zip_filename=file.filename or "",
+                )
+            except BaseException as e:
+                # Cattura ANCHE BaseException (MemoryError, SystemExit, ecc.)
+                # per garantire che l'utente riceva sempre un evento di errore
+                emitter.emit_error(
+                    __import__("v2.schemas.events", fromlist=["ErrorKind"]).ErrorKind.UNKNOWN,
+                    f"pipeline_crashed: {e!r}",
+                )
+                return {"success": False, "error": f"crashed: {e!r}"}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = loop.run_in_executor(pool, _run_pipeline)
+
+            # Drain la queue mentre la pipeline lavora
+            while not future.done():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    line = _serialize_event(event)
+                    if line:
+                        yield line
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+
+            # Svuota eventi residui
+            while not queue.empty():
+                event = queue.get_nowait()
+                line = _serialize_event(event)
+                if line:
+                    yield line
+
+            # Risultato
+            try:
+                result = future.result()
+                if result.get("success"):
+                    output_path = result.get("output_path")
+                    if output_path and os.path.exists(output_path):
+                        with open(output_path, "rb") as f:
+                            word_bytes = f.read()
+                        try:
+                            save_pratica(
+                                user_id=username, tipo="report_v2",
+                                file_output_path="", file_output_name=result.get("output_filename", ""),
+                                azienda=result.get("company_name", ""), norma="",
+                                file_size=len(word_bytes),
+                                processing_time=int(result.get("stats", {}).get("duration_seconds", 0)),
+                            )
+                            _log_activity(username, "v2_report_generated",
+                                           f"Azienda: {result.get('company_name')}")
+                        except Exception:
+                            pass
+
+                        done_payload = {
+                            "type": "done_with_payload",
+                            # FIX 14: il frontend useSSEProcess controlla
+                            # event.done == true per chiudere il loop SSE e
+                            # invocare onDone(). Senza questo flag il payload
+                            # finale viene interpretato come "progress event"
+                            # con pct=undefined → setProgress(0) e la UI
+                            # sembra "ripartire da zero" alla fine della run.
+                            "done": True,
+                            "session_id": session_id,
+                            "filename": result.get("output_filename"),
+                            "word_base64": base64.b64encode(word_bytes).decode(),
+                            "company_name": result.get("company_name"),
+                            "stats": result.get("stats", {}),
+                        }
+                        yield SSEEmitter.serialize_for_sse(done_payload)
+            except Exception as e:
+                logger.error(f"[V2 Tab1] post-pipeline: {e}")
+            finally:
+                wd.stop(timeout=2.0)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/v2/report/resume/{session_id}")
+async def v2_report_resume(session_id: str, user: Dict = Depends(_get_current_user)):
+    """Replay eventi SSE per recovery post-disconnessione."""
+    from v2.recovery_handler import replay_session_sse_async
+
+    async def replay_gen():
+        async for line in replay_session_sse_async(session_id):
+            yield line
+
+    return StreamingResponse(
+        replay_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/v2/report/status/{session_id}")
+async def v2_report_status(session_id: str, user: Dict = Depends(_get_current_user)):
+    """Probe leggero stato sessione V2."""
+    from v2.recovery_handler import session_status
+    return session_status(session_id)
+
+
+@app.get("/api/v2/report/download/{session_id}/section/{section_index}")
+async def v2_download_section(
+    session_id: str, section_index: int,
+    user: Dict = Depends(_get_current_user),
+):
+    """Download anticipato di una sezione partial."""
+    from fastapi.responses import Response
+    from v2.section_download_handler import section_response
+
+    resp = section_response(session_id, section_index)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.error)
+    return Response(content=resp.body, media_type=resp.content_type, headers=resp.headers)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

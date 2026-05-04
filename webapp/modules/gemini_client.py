@@ -26,6 +26,18 @@ from config import (
 )
 from modules.genai_factory import create_genai_client
 
+try:
+    from modules.gemini_throttle import gemini_structured_slot, adaptive_delay
+    _HAS_THROTTLE = True
+except ImportError:
+    _HAS_THROTTLE = False
+    from contextlib import contextmanager
+    @contextmanager
+    def gemini_structured_slot():
+        yield
+    def adaptive_delay(attempt, error_kind="rate_limit"):
+        return 5 * (2 ** attempt)
+
 
 class GeminiClient:
     """
@@ -141,11 +153,12 @@ OUTPUT RICHIESTO - SOLO JSON:
                         ]
                     )
 
-                    response = self.client.models.generate_content(
-                        model=self.model_name,
-                        contents=full_prompt,
-                        config=safety_config
-                    )
+                    with gemini_structured_slot():
+                        response = self.client.models.generate_content(
+                            model=self.model_name,
+                            contents=full_prompt,
+                            config=safety_config
+                        )
                     
                     # Estrai testo dalla risposta
                     if hasattr(response, 'text'):
@@ -168,11 +181,12 @@ OUTPUT RICHIESTO - SOLO JSON:
                     old_prompt = prompt if skip_system_prompt else self.system_prompt + "\n\n---\n\n" + prompt
                     # Determinismo: temperature=0 + seed=42 anche su SDK legacy
                     generation_config_old = {"temperature": 0.0, "top_p": 1.0, "seed": 42}
-                    response = self.model.generate_content(
-                        old_prompt,
-                        safety_settings=safety_settings_old,
-                        generation_config=generation_config_old,
-                    )
+                    with gemini_structured_slot():
+                        response = self.model.generate_content(
+                            old_prompt,
+                            safety_settings=safety_settings_old,
+                            generation_config=generation_config_old,
+                        )
                     result = (response.text or "").strip()
                 
                 elapsed = time.time() - start_time
@@ -184,19 +198,26 @@ OUTPUT RICHIESTO - SOLO JSON:
                 elapsed = time.time() - start_time
                 error_str = str(e).lower()
                 
-                # Gestione errore 429 (rate limit)
+                # Gestione errore 429 (rate limit) — backoff aggressivo + jitter
                 if '429' in str(e) or 'resource_exhausted' in error_str or 'quota' in error_str:
-                    wait_time = BASE_DELAY * (2 ** attempt)  # 5s, 10s, 20s
-                    print(f"[RATE LIMIT] Tentativo {attempt + 1}/{MAX_API_RETRIES} - Attesa {wait_time}s prima di riprovare...")
+                    wait_time = adaptive_delay(attempt, "rate_limit")
+                    print(f"[RATE LIMIT] Tentativo {attempt + 1}/{MAX_API_RETRIES} - Attesa {wait_time:.1f}s prima di riprovare...")
                     time.sleep(wait_time)
                     continue
-                    
+
+                # Errore 503 (overload Google) — backoff conservativo
+                if '503' in str(e) or 'unavailable' in error_str:
+                    wait_time = adaptive_delay(attempt, "overload")
+                    print(f"[OVERLOAD] Tentativo {attempt + 1}/{MAX_API_RETRIES} - Attesa {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                    continue
+
                 # Altri errori
                 print(f"[API ERROR] {str(e)} dopo {elapsed:.1f}s")
-                
+
                 if attempt < MAX_API_RETRIES - 1:
-                    wait_time = BASE_DELAY * (attempt + 1)
-                    print(f"[RETRY] Attesa {wait_time}s prima del tentativo {attempt + 2}...")
+                    wait_time = adaptive_delay(attempt, "rate_limit")
+                    print(f"[RETRY] Attesa {wait_time:.1f}s prima del tentativo {attempt + 2}...")
                     time.sleep(wait_time)
                 else:
                     raise

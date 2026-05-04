@@ -17,3 +17,10 @@ pywin32>=306; sys_platform == "win32"
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
+
+# ── V2 Pipeline (Metodo A — Triage Funnel) ────────────────────────────────────
+# Aggiunte sul branch v2-experimental. NON impattano V1 (import lazy).
+pypdfium2>=4.30.0       # Fase 1: estrazione testo nativo PDF
+docxcompose>=1.4.0      # Fase 0.5/7: Word merging incrementale (PoC validato)
+# filelock>=3.13.0      # Fase 6: progress store concurrent-safe (verrà aggiunto)
+# psutil>=5.9.0         # Fase 6: heartbeat watchdog metrics (verrà aggiunto)

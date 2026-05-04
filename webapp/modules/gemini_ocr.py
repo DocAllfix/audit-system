@@ -43,6 +43,18 @@ try:
 except ImportError:
     HAS_FACTORY = False
 
+try:
+    from modules.gemini_throttle import gemini_ocr_slot, adaptive_delay
+    HAS_THROTTLE = True
+except ImportError:
+    HAS_THROTTLE = False
+    from contextlib import contextmanager
+    @contextmanager
+    def gemini_ocr_slot():
+        yield
+    def adaptive_delay(attempt, error_kind="rate_limit"):
+        return [5, 15, 30][min(attempt, 2)]
+
 
 class GeminiOCR:
     """
@@ -185,26 +197,27 @@ NON aggiungere commenti o interpretazioni, solo il testo estratto.
 Se non riesci a leggere parti del testo, indica [illeggibile].
 """
             
-            # Chiamata API con immagine
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[
-                    {
-                        "parts": [
-                            {"text": prompt},
-                            {
-                                "inline_data": {
-                                    "mime_type": "image/png",
-                                    "data": image_b64
+            # Chiamata API con immagine — throttled
+            with gemini_ocr_slot():
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[
+                        {
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inline_data": {
+                                        "mime_type": "image/png",
+                                        "data": image_b64
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ]
-            )
-            
+                            ]
+                        }
+                    ]
+                )
+
             return (getattr(response, 'text', None) or "").strip()
-            
+
         except Exception as e:
             print(f"Errore OCR Gemini pagina {page_num}: {e}")
             return ""
@@ -251,10 +264,11 @@ Se non riesci a leggere parti del testo, indica [illeggibile].
             last_primary_err = None
             for attempt in range(self.max_retries):
                 try:
-                    response = self.client.models.generate_content(
-                        model=self.model_name,
-                        contents=[{"parts": parts}]
-                    )
+                    with gemini_ocr_slot():
+                        response = self.client.models.generate_content(
+                            model=self.model_name,
+                            contents=[{"parts": parts}]
+                        )
                     text = response.text.strip() if response.text else ""
                     
                     # Sanity check lunghezza output (evita loop infiniti > 40k chars per batch)
@@ -268,25 +282,29 @@ Se non riesci a leggere parti del testo, indica [illeggibile].
                         return text, f"gemini_ocr_batch_2.5{mode_suffix}"
                 except Exception as primary_err:
                     last_primary_err = primary_err
-                    is_overloaded = "503" in str(primary_err) or "UNAVAILABLE" in str(primary_err)
-                    
-                    if is_overloaded and attempt < self.max_retries - 1:
-                        delay = self.retry_delays[attempt]
-                        print(f"[OCR] Gemini 2.5 tentativo {attempt + 1}/{self.max_retries} fallito (503), retry tra {delay}s...")
+                    err_str = str(primary_err)
+                    is_overloaded = "503" in err_str or "UNAVAILABLE" in err_str
+                    is_rate_limit = "429" in err_str or "Rate" in err_str or "quota" in err_str.lower()
+
+                    if (is_overloaded or is_rate_limit) and attempt < self.max_retries - 1:
+                        kind = "overload" if is_overloaded else "rate_limit"
+                        delay = adaptive_delay(attempt, kind)
+                        print(f"[OCR] Gemini 2.5 tentativo {attempt + 1}/{self.max_retries} fallito ({kind}), retry tra {delay:.1f}s...")
                         time.sleep(delay)
                     elif attempt < self.max_retries - 1:
-                        # Errore non-503, non ritentare sullo stesso modello
-                        print(f"[OCR] Gemini 2.5 fallito (non-503): {primary_err}, passo a fallback...")
+                        # Errore non-retryable (es. FAILED_PRECONDITION, INVALID_ARGUMENT)
+                        print(f"[OCR] Gemini 2.5 fallito (non-retry): {primary_err}, passo a fallback...")
                         break
                     else:
                         print(f"[OCR] Gemini 2.5 fallito dopo {self.max_retries} tentativi: {last_primary_err}, passo a fallback...")
             
             # TENTATIVO 2: Modello fallback (Gemini 2.5 Flash Lite - leggero e supportato)
             try:
-                response = self.client.models.generate_content(
-                    model=self.fallback_model,
-                    contents=[{"parts": parts}]
-                )
+                with gemini_ocr_slot():
+                    response = self.client.models.generate_content(
+                        model=self.fallback_model,
+                        contents=[{"parts": parts}]
+                    )
                 text = response.text.strip() if response.text else ""
                 if text and len(text) > 20:
                     print(f"[OCR] Fallback {self.fallback_model} riuscito!")
@@ -347,15 +365,16 @@ Se non riesci a leggere parti del testo, indica [illeggibile].
                 "NON aggiungere commenti o interpretazioni, solo il testo estratto.\n"
                 "Se non riesci a leggere parti del testo, indica [illeggibile]."
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": mime_type, "data": image_b64}}
-                    ]
-                }]
-            )
+            with gemini_ocr_slot():
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[{
+                        "parts": [
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": mime_type, "data": image_b64}}
+                        ]
+                    }]
+                )
             text = (getattr(response, "text", None) or "").strip()
             fmt = mime_type.split("/")[-1]
             return text, f"gemini_ocr_{fmt}"
