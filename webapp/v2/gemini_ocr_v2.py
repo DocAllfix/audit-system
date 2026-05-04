@@ -31,10 +31,10 @@ OCR_MODEL_PRIMARY = "gemini-2.5-flash"
 OCR_MODEL_FALLBACK = "gemini-2.5-flash-lite"
 
 # Concorrenza inferenze (semaforo separato dall'upload)
-MAX_OCR_INFERENCES_PARALLEL = 5
+MAX_OCR_INFERENCES_PARALLEL = int(os.environ.get("V2_OCR_PARALLEL", "8"))
 
 # Timeout per inferenza singola (seconds)
-OCR_INFERENCE_TIMEOUT = 120
+OCR_INFERENCE_TIMEOUT = int(os.environ.get("V2_OCR_INFERENCE_TIMEOUT", "90"))
 
 # Cap caratteri output OCR (anti-blob)
 MAX_OCR_OUTPUT_CHARS = 100_000
@@ -233,6 +233,7 @@ def ocr_extract_files(
     cleanup_after: bool = True,
     max_workers: int = MAX_OCR_INFERENCES_PARALLEL,
     meter_session_id: Optional[str] = None,
+    on_progress=None,
 ) -> List[OCRResult]:
     """
     Esegue OCR su una lista di file (tipicamente bucket `needs_ocr` da Fase 1).
@@ -243,6 +244,10 @@ def ocr_extract_files(
         session_id: identificatore sessione per manifest persistente
         cleanup_after: se True, cancella i file uploaded a fine pipeline
         max_workers: concorrenza inferenze parallele
+        on_progress: callback opzionale chiamato dopo ogni file completato
+                     con (completed_int, total_int, current_filename_str).
+                     Usato dal pipeline per emettere SSE phase_tick granulari
+                     cosi' la UI vede il progress avanzare ogni 5-10s.
 
     Returns:
         Lista OCRResult, una per file di input, ordine preservato.
@@ -269,15 +274,26 @@ def ocr_extract_files(
     results: List[OCRResult] = [None] * len(files)  # type: ignore
     workers = max(1, min(max_workers, len(files)))
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    # FIX 12: NON usiamo `with ThreadPoolExecutor(...) as executor:` perche'
+    # il context manager fa shutdown(wait=True) implicito che blocca finche'
+    # TUTTI i thread interni terminano. Se anche un solo thread e' in
+    # deadlock dentro SDK Gemini (bug encoding o I/O bloccato), il pipeline
+    # resta hangato in attesa del thread orfano per ore.
+    # Soluzione: shutdown(wait=False) nel finally → main loop procede,
+    # eventuali thread orfani muoiono col processo Python.
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         future_to_idx = {
             executor.submit(_ocr_single_file, client, f, manifest, meter_session_id): i
             for i, f in enumerate(files)
         }
+        completed_count = 0
+        total_count = len(files)
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
+            # FIX 11: timeout aggressivo per impedire hang silenziosi.
             try:
-                results[idx] = future.result(timeout=OCR_INFERENCE_TIMEOUT * 2)
+                results[idx] = future.result(timeout=OCR_INFERENCE_TIMEOUT)
             except Exception as e:
                 f = files[idx]
                 results[idx] = OCRResult(
@@ -285,8 +301,29 @@ def ocr_extract_files(
                     path=f.get("path", ""),
                     success=False,
                     method="failed",
-                    error=f"executor_error: {e}",
+                    error=f"executor_error_or_timeout: {e}",
                 )
+                try:
+                    future.cancel()
+                except Exception:
+                    pass
+
+            # FIX 10: progress tick granulare per UI live
+            completed_count += 1
+            if on_progress is not None:
+                try:
+                    cur = results[idx]
+                    on_progress(completed_count, total_count,
+                                cur.filename if cur else "")
+                except Exception:
+                    pass
+    finally:
+        # FIX 12: shutdown non-blocking per evitare hang su thread orfani
+        # (deadlock SDK Gemini su file con accenti / encoding edge cases).
+        try:
+            executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     # Cleanup file uploaded (libera quota Files API)
     if cleanup_after:

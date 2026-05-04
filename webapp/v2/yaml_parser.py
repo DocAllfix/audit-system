@@ -373,6 +373,79 @@ def _score_company_source(block_tipi: List[str]) -> int:
     return score
 
 
+def _normalize_company_key(nome: str) -> str:
+    """
+    FIX 15: chiave di aggregazione per identificare lo stesso ente con
+    varianti diverse di forma giuridica/punteggiatura.
+
+    Strategia in 3 step:
+    1. Lowercase + strip accenti + sostituisci punteggiatura con spazi
+    2. Rimuovi pattern multi-parola di forme giuridiche italiane
+    3. Tokenizza, rimuovi token-singoli (sigle frammentate), dedup consecutivi
+
+    Esempio (10 varianti MEDIL → stessa chiave 'consorzio stabile medil'):
+        CONSORZIO STABILE MEDIL S.C.P.A.
+        CONSORZIO STABILE MEDIL SOCIETA' CONSORTILE PER AZIONI
+        CONSORZIO STABILE MEDIL SOC CONS RL
+        CONSORZIO STABILE MEDIL SOCIETA' CONSORTILE A R.L.
+        CONSORZIO STABILE MEDIL S.C.p.A
+        CONSORZIO STABILE MEDIL SOCIETA'
+        CONSORZIO STABILE MEDIL SOCIETA CONSORTILE PER AZIONI
+        CONSORZIO STABILE MEDIL SOC CONS RL
+        CONSORZIO STABILE MEDIL SOCIETA' CONSORTILE AR.L
+        CONSORZIO STABILE MEDIL SOCIETÀ CONSORTILE PER AZIONI MEDIL S.C.P.A.
+
+    Cosi' la selezione del nome azienda puo' AGGREGARE lo score di tutte
+    le varianti invece di farsi battere dal score singolo di un fornitore.
+    """
+    if not nome:
+        return ""
+    import unicodedata
+    s = nome.lower()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    # Punteggiatura → spazi (mantieni & e numeri perche' distintivi)
+    s = re.sub(r"[.,;:'\"`\-]", " ", s)
+
+    # Step 1: rimuovi pattern multi-parola completi (piu' lunghi prima)
+    multi_word_patterns = [
+        r"\bsocieta?\s+consortile\s+per\s+azioni\b",
+        r"\bsocieta?\s+consortile\s+a\s*r\s*l\b",
+        r"\bsocieta?\s+consortile\b",
+        r"\bsoc\s+cons\s+r\s*l\b",
+        r"\bsoc\s+cons\b",
+        r"\bsocieta\b",                  # societa standalone (residuo)
+        r"\ba\s*r\s*l\b",                # a r l / arl (residuo dopo societa+consortile)
+        r"\bs\s*c\s*a\s*r\s*l\b",
+        r"\bs\s*c\s*p\s*a\b",
+        r"\bs\s*p\s*a\b",
+        r"\bs\s*r\s*l\b",
+        r"\bs\s*n\s*c\b",
+        r"\bs\s*a\s*s\b",
+    ]
+    for p in multi_word_patterns:
+        s = re.sub(p, " ", s)
+
+    # Step 2: rimuovi token-singoli che restano (sigle compresse +
+    # caratteri orfani residui da pattern parzialmente matchati).
+    # I single-char (s, c, p, a, r, l, n) sono sempre residui di sigle
+    # frammentate dalla punteggiatura "S.C.A.R.L." → "s c a r l".
+    single_words_to_remove = {
+        'srl', 'spa', 'scpa', 'scarl', 'snc', 'sas',
+        'consortile', 'cons', 'soc', 'rl',
+        # single-char residui di sigle italiane
+        's', 'c', 'p', 'a', 'r', 'l', 'n',
+    }
+    tokens = [t for t in s.split() if t not in single_words_to_remove]
+
+    # Step 3: dedup consecutivi (es. "medil medil" → "medil")
+    deduped = []
+    for t in tokens:
+        if not deduped or deduped[-1] != t:
+            deduped.append(t)
+
+    return " ".join(deduped).strip()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Aggregazione batch
 # ──────────────────────────────────────────────────────────────────────────────
@@ -526,27 +599,56 @@ def parse_aggregated_yaml(text: str) -> Dict[str, Any]:
                     }
                 sezioni_by_name[key]["documenti"].append(top_level_doc)
 
-    # Selezione finale azienda: nome dal vincitore score, altri campi
-    # dal merge accumulativo (best of both worlds vs V1).
+    # FIX 15: Selezione finale azienda con SCORE AGGREGATO per nome
+    # normalizzato (forma giuridica strippata). Cosi' un'azienda con 17
+    # batch di fatture (score 30 ciascuno = 510) batte un fornitore con 1
+    # singola visura DURC (score 100). Il bug pre-Fix15 sceglieva DSE
+    # COSTRUZIONI come azienda al posto di CONSORZIO STABILE MEDIL.
     merged_meta_azienda: Dict[str, Any] = {}
     if azienda_candidates:
-        azienda_candidates.sort(key=lambda t: t[0], reverse=True)
-        best_score, best_azienda = azienda_candidates[0]
-        # Parti dai campi accumulati (piva/sede/...) e sovrascrivi solo
-        # con quelli del vincitore se ha più info
-        merged_meta_azienda = dict(merged_secondary_fields)
-        merged_meta_azienda["nome"] = best_azienda.get("nome", "")
-        # Aggiungi gli altri campi del vincitore se mancano
-        for k, v in best_azienda.items():
-            if k == "nome":
+        from collections import defaultdict
+        score_by_key: Dict[str, int] = defaultdict(int)
+        candidates_by_key: Dict[str, List[tuple]] = defaultdict(list)
+        for score, candidate in azienda_candidates:
+            key = _normalize_company_key(candidate.get("nome", ""))
+            if not key:
                 continue
-            if v in (None, "", {}, []):
-                continue
-            if k not in merged_meta_azienda:
-                merged_meta_azienda[k] = v
-        print(
-            f"[V2 PARSER] Nome azienda scelto: "
-            f"'{merged_meta_azienda.get('nome', '')}' (score={best_score})"
+            score_by_key[key] += score
+            candidates_by_key[key].append((score, candidate))
+
+        # Vincitore: gruppo con score AGGREGATO piu' alto. In caso di
+        # parita', vince il gruppo con piu' candidati (frequenza).
+        if score_by_key:
+            best_key = max(
+                score_by_key.items(),
+                key=lambda kv: (kv[1], len(candidates_by_key[kv[0]])),
+            )[0]
+            group = candidates_by_key[best_key]
+            # Dentro il gruppo vincente, scegli il candidato con score
+            # singolo piu' alto (visura > fattura > attestato). In caso
+            # di parita', il nome piu' lungo (piu' info, es. inclusione
+            # forma giuridica completa).
+            group.sort(
+                key=lambda t: (t[0], len(t[1].get("nome", ""))),
+                reverse=True,
+            )
+            best_score_single, best_azienda = group[0]
+            best_score_aggregated = score_by_key[best_key]
+
+            merged_meta_azienda = dict(merged_secondary_fields)
+            merged_meta_azienda["nome"] = best_azienda.get("nome", "")
+            for k, v in best_azienda.items():
+                if k == "nome":
+                    continue
+                if v in (None, "", {}, []):
+                    continue
+                if k not in merged_meta_azienda:
+                    merged_meta_azienda[k] = v
+            print(
+                f"[V2 PARSER] Nome azienda scelto (Fix 15 score aggregato): "
+                f"'{merged_meta_azienda.get('nome', '')}' "
+                f"(score_aggregato={best_score_aggregated}, "
+                f"varianti={len(group)}/{len(azienda_candidates)} batch)"
         )
 
     # Assembla output finale

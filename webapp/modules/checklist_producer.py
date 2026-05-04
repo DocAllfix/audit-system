@@ -20,6 +20,14 @@ from config import (
 )
 from modules.genai_factory import create_genai_client
 
+try:
+    from modules.gemini_throttle import gemini_structured_slot
+except ImportError:
+    from contextlib import contextmanager
+    @contextmanager
+    def gemini_structured_slot():
+        yield
+
 # ═══ SCHEMI CLAUSOLE PER NORMA ═══
 # Definisce le chiavi delle clausole per ogni norma (usato per response_schema)
 CHECKLIST_SCHEMAS_DIR = os.path.join(os.path.dirname(PROMPTS_CHECKLIST_DIR), "prompts", "checklist_schemas")
@@ -360,12 +368,13 @@ ESEMPI DI OUTPUT CORRETTO:
 
 OUTPUT: Scrivi SOLO il nome completo dell'azienda, nient'altro. Se non identificabile: "UNKNOWN"."""
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=100)
-        )
-        
+        with gemini_structured_slot():
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=100)
+            )
+
         result = response.text.strip().replace('"', '').replace('\n', '').replace('*', '')
         
         # Rimuovi eventuali prefissi tipo "Nome:" o "Azienda:"
@@ -524,17 +533,18 @@ def process_clause_group(
             
             # Schema per questo gruppo specifico
             group_schema = build_group_schema(clauses)
-            
-            response = client.models.generate_content(
-                model=GEMINI_MODEL_CHECKLIST,
-                contents=group_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=32000,
-                    response_mime_type="application/json",
-                    response_schema=group_schema
+
+            with gemini_structured_slot():
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL_CHECKLIST,
+                    contents=group_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=32000,
+                        response_mime_type="application/json",
+                        response_schema=group_schema
+                    )
                 )
-            )
             
             import json
             response_text = response.text.strip()
@@ -788,14 +798,15 @@ CLAUSOLA ESPANSA:
 """
         
         try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL_CHECKLIST,
-                contents=regen_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=2000
+            with gemini_structured_slot():
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL_CHECKLIST,
+                    contents=regen_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        max_output_tokens=2000
+                    )
                 )
-            )
             
             new_text = response.text.strip()
             # Usa soglia dinamica per la norma specifica
@@ -893,14 +904,15 @@ TESTO CLAUSOLA:
         max_retries = 5  # Aumentato da 3 per maggiore resilienza
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL_CHECKLIST,
-                    contents=recovery_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                        max_output_tokens=4000  # Aumentato da 2500 per clausole complete
+                with gemini_structured_slot():
+                    response = client.models.generate_content(
+                        model=GEMINI_MODEL_CHECKLIST,
+                        contents=recovery_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.3,
+                            max_output_tokens=4000  # Aumentato da 2500 per clausole complete
+                        )
                     )
-                )
                 
                 # NUOVO: Verifica finish_reason per rilevare troncature
                 finish_reason = getattr(response.candidates[0], 'finish_reason', None) if response.candidates else None
@@ -1028,13 +1040,14 @@ TESTO CLAUSOLA:
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL_CHECKLIST,
-                    contents=recovery_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        max_output_tokens=4000
-                    )
+                with gemini_structured_slot():
+                    response = client.models.generate_content(
+                        model=GEMINI_MODEL_CHECKLIST,
+                        contents=recovery_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.0,
+                            max_output_tokens=4000
+                        )
                 )
                 
                 new_text = response.text.strip()
@@ -1314,17 +1327,18 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
             try:
                 # Costruisci schema per la norma specifica
                 response_schema = build_response_schema(norma)
-                
-                api_response[0] = client.models.generate_content(
-                    model=GEMINI_MODEL_CHECKLIST,
-                    contents=full_message,
-                    config=types.GenerateContentConfig(
-                        temperature=0.1,
-                        max_output_tokens=65536,
-                        response_mime_type="application/json",
-                        response_schema=response_schema  # Schema stretto per JSON valido
+
+                with gemini_structured_slot():
+                    api_response[0] = client.models.generate_content(
+                        model=GEMINI_MODEL_CHECKLIST,
+                        contents=full_message,
+                        config=types.GenerateContentConfig(
+                            temperature=0.1,
+                            max_output_tokens=65536,
+                            response_mime_type="application/json",
+                            response_schema=response_schema  # Schema stretto per JSON valido
+                        )
                     )
-                )
             except Exception as e:
                 api_error[0] = e
             finally:
@@ -1532,17 +1546,18 @@ ESEMPI CORRETTI:
 
 OUTPUT: Scrivi SOLO il nome completo dell'azienda, nient'altro. Se non identificabile: "UNKNOWN"."""
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                max_output_tokens=100  # Aumentato per nomi lunghi
+        with gemini_structured_slot():
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=100  # Aumentato per nomi lunghi
+                )
             )
-        )
-        
+
         result = response.text.strip().replace('"', '').replace('\n', '').replace('*', '')
-        
+
         # Rimuovi eventuali prefissi tipo "Nome:" o "Azienda:"
         result = re.sub(r'^(?:Nome|Azienda|Organizzazione|Output|Risposta)\s*:\s*', '', result, flags=re.IGNORECASE).strip()
         

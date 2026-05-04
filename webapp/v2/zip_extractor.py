@@ -94,6 +94,55 @@ def _categorize_file(filename: str) -> str:
     return _CATEGORY_BY_EXT.get(ext, "other")
 
 
+def _is_macos_artifact(member_path: str) -> bool:
+    """
+    True se il path è un artefatto macOS da escludere SEMPRE:
+    - Path che iniziano con `__MACOSX/` (cartella generata da Archive Utility)
+    - Qualsiasi basename che inizia con `._` (resource fork files)
+    """
+    norm = member_path.replace("\\", "/")
+    if norm.startswith("__MACOSX/") or "/__MACOSX/" in norm:
+        return True
+    base = os.path.basename(norm)
+    if base.startswith("._"):
+        return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Long path Windows (MAX_PATH bypass)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Soglia caratteri sopra la quale applichiamo il prefisso `\\?\` su Windows
+# per bypassare il limite MAX_PATH=260 delle API Win32 storiche. Sotto soglia
+# evitiamo il prefix per minimizzare side-effect su componenti che potrebbero
+# non gestirlo (logging, normalizzazione path, vecchie librerie native).
+_LONG_PATH_THRESHOLD = 240
+_LONG_PATH_PREFIX = "\\\\?\\"
+
+
+def _to_long_path(p) -> str:
+    r"""
+    Su Windows ritorna il path in forma ``\\?\<absolute>`` se la stringa
+    supera ``_LONG_PATH_THRESHOLD``. Su Linux/macOS o sotto soglia ritorna
+    ``os.fspath(p)`` invariato. Idempotente: non riapplica il prefix se gia'
+    presente.
+
+    Senza questo helper, ``open(target, 'wb')`` su path > 260 char fallisce
+    con ``FileNotFoundError [Errno 2]`` e il file NON viene estratto,
+    scomparendo silenziosamente dall'output.
+    """
+    s = os.fspath(p)
+    if os.name != "nt":
+        return s
+    if len(s) < _LONG_PATH_THRESHOLD:
+        return s
+    if s.startswith(_LONG_PATH_PREFIX):
+        return s
+    abs_path = os.path.abspath(s).replace("/", "\\")
+    return _LONG_PATH_PREFIX + abs_path
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Anti path-traversal helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -140,7 +189,7 @@ def _extract_single_zip(
     nested_zips: List[Path] = []
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        with zipfile.ZipFile(_to_long_path(zip_path), "r") as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -150,6 +199,13 @@ def _extract_single_zip(
                 if state["bytes"] >= MAX_TOTAL_BYTES:
                     print(f"[V2 ZIP] limite MAX_TOTAL_BYTES={MAX_TOTAL_BYTES} raggiunto")
                     break
+
+                # Filtro artefatti macOS PRIMA del basename check: cattura sia
+                # la cartella `__MACOSX/` che i resource fork `._*` ovunque
+                # nell'albero del ZIP (anche per ZIP creati su macOS via
+                # Archive Utility e ricondivisi su Windows).
+                if _is_macos_artifact(info.filename):
+                    continue
 
                 fname = os.path.basename(info.filename)
                 if not fname or fname.startswith(".") or fname.startswith("__"):
@@ -167,16 +223,19 @@ def _extract_single_zip(
                     print(f"[V2 ZIP] {e}, skip")
                     continue
 
-                # Ensure parent dir
+                # Ensure parent dir (con prefix Windows long-path se serve)
+                parent_safe = _to_long_path(target.parent)
                 try:
-                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.makedirs(parent_safe, exist_ok=True)
                 except OSError as e:
                     print(f"[V2 ZIP] mkdir fallito {target.parent}: {e}")
                     continue
 
-                # Scrivi file in streaming (memoria costante)
+                # Scrivi file in streaming (memoria costante). Su Windows path
+                # > 240 char usiamo il prefix \\?\ per bypassare MAX_PATH=260.
+                target_safe = _to_long_path(target)
                 try:
-                    with zf.open(info) as src, open(target, "wb") as dst:
+                    with zf.open(info) as src, open(target_safe, "wb") as dst:
                         shutil.copyfileobj(src, dst)
                 except (OSError, zipfile.BadZipFile) as e:
                     print(f"[V2 ZIP] estrazione {info.filename} fallita: {e}")
@@ -189,9 +248,12 @@ def _extract_single_zip(
                 if category == "zip":
                     nested_zips.append(target)
                 else:
+                    # Salviamo il path con prefix Windows se applicato, così
+                    # i caller downstream (text_extractor, gemini_ocr) possono
+                    # aprire il file senza ulteriore conversione.
                     extracted.append({
                         "filename": fname,
-                        "path": str(target),
+                        "path": target_safe,
                         "size": size,
                         "category": category,
                     })
@@ -205,14 +267,14 @@ def _extract_single_zip(
     for nested in nested_zips:
         nested_extract_dir = extract_dir / f"{nested.stem}_unzipped"
         try:
-            nested_extract_dir.mkdir(parents=True, exist_ok=True)
+            os.makedirs(_to_long_path(nested_extract_dir), exist_ok=True)
         except OSError:
             continue
         nested_files = _extract_single_zip(nested, nested_extract_dir, depth + 1, state)
         extracted.extend(nested_files)
         # Rimuovi il ZIP nested dopo l'estrazione (evita che venga incluso come file)
         try:
-            nested.unlink()
+            os.unlink(_to_long_path(nested))
         except OSError:
             pass
 

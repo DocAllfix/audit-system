@@ -599,15 +599,145 @@ def build_macroarea_section(
 # Helper: build all sections for a session
 # ──────────────────────────────────────────────────────────────────────────────
 
+_UNPROCESSED_SECTION_INDEX = 99
+_UNPROCESSED_SECTION_NAME = "DOCUMENTI NON ELABORATI"
+
+
+def build_unprocessed_section(
+    unprocessed_files: List[Dict[str, Any]],
+    session_id: str,
+    base_dir: Optional[Path] = None,
+    section_index: int = _UNPROCESSED_SECTION_INDEX,
+) -> SectionBuildResult:
+    """
+    Genera una sezione finale "DOCUMENTI NON ELABORATI" che elenca i file dello
+    ZIP che non sono stati inclusi nelle schede di evidenza, con motivazione.
+
+    Trasparenza per l'auditor: nessun file scompare silenziosamente. Quando il
+    pipeline incontra estrazione fallita, OCR fallito, batch troncato senza
+    fallback utile, il filename appare qui invece di sparire dall'output.
+
+    Args:
+        unprocessed_files: lista di dict con almeno
+            - "filename": str (nome file logico)
+            - "reason": str (causa, es. "ocr_failed", "batch_truncated")
+            - "phase": str opzionale (es. "estrazione", "triage", "analyze")
+        session_id: identificatore sessione
+        base_dir: opzionale per test
+        section_index: numero d'ordine (default 99 = ultimo nel merge)
+
+    Returns:
+        SectionBuildResult. Se la lista è vuota: success=True con
+        output_path=None (nessun file creato), così build_all_sections può
+        chiamare sempre questa funzione senza side-effect.
+    """
+    import time
+    t0 = time.monotonic()
+
+    if not HAS_DOCX:
+        return SectionBuildResult(
+            section_index=section_index, section_name=_UNPROCESSED_SECTION_NAME,
+            success=False, error="python_docx_not_installed",
+        )
+
+    try:
+        _validate_session_id(session_id)
+    except ValueError as e:
+        return SectionBuildResult(
+            section_index=section_index, section_name=_UNPROCESSED_SECTION_NAME,
+            success=False, error=str(e),
+        )
+
+    # Lista vuota → nessuna sezione creata. Comportamento idempotente.
+    if not unprocessed_files:
+        return SectionBuildResult(
+            section_index=section_index,
+            section_name=_UNPROCESSED_SECTION_NAME,
+            success=True,
+            output_path=None,
+            documents_count=0,
+            duration_seconds=round(time.monotonic() - t0, 3),
+        )
+
+    # Raggruppa per phase (estrazione/triage/analyze) preservando l'ordine
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    phase_order: List[str] = []
+    for item in unprocessed_files:
+        if not isinstance(item, dict):
+            continue
+        phase = str(item.get("phase") or "altro").strip().lower()
+        if phase not in grouped:
+            grouped[phase] = []
+            phase_order.append(phase)
+        grouped[phase].append(item)
+
+    section_dir = _section_dir(session_id, base_dir)
+    section_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{section_index:02d}_documenti_non_elaborati.docx"
+    output_path = section_dir / filename
+
+    try:
+        doc = Document()
+        _setup_margins(doc)
+
+        doc.add_heading(_UNPROCESSED_SECTION_NAME, level=1)
+
+        intro = doc.add_paragraph()
+        intro.add_run(
+            f"I seguenti {len(unprocessed_files)} file presenti nello ZIP NON "
+            "sono stati inclusi nelle schede di evidenza per i motivi elencati. "
+            "Questa sezione garantisce trasparenza all'auditor: ogni file "
+            "scartato e' tracciato qui con la causa specifica."
+        ).italic = True
+
+        for phase in phase_order:
+            items = grouped[phase]
+            doc.add_heading(
+                f"{phase.capitalize()} ({len(items)} file)", level=2
+            )
+            tbl = doc.add_table(rows=1 + len(items), cols=2)
+            tbl.style = "Light Grid Accent 1"
+            _add_header_row(tbl, ["Filename", "Motivo"])
+            for i, it in enumerate(items, start=1):
+                row = tbl.rows[i]
+                row.cells[0].text = _safe_str(it.get("filename"))[:200]
+                row.cells[1].text = _safe_str(it.get("reason"))[:300]
+            doc.add_paragraph()
+
+        doc.save(str(output_path))
+        size = output_path.stat().st_size
+
+        return SectionBuildResult(
+            section_index=section_index,
+            section_name=_UNPROCESSED_SECTION_NAME,
+            success=True,
+            output_path=output_path,
+            file_size_bytes=size,
+            documents_count=len(unprocessed_files),
+            duration_seconds=round(time.monotonic() - t0, 3),
+        )
+    except Exception as e:
+        return SectionBuildResult(
+            section_index=section_index,
+            section_name=_UNPROCESSED_SECTION_NAME,
+            success=False,
+            error=f"build_failed: {e}",
+            duration_seconds=round(time.monotonic() - t0, 3),
+        )
+
+
 def build_all_sections(
     parsed_data: Dict[str, Any],
     session_id: str,
     docs_estratti: int = 0,
     docs_vuoti: int = 0,
     base_dir: Optional[Path] = None,
+    unprocessed_files: Optional[List[Dict[str, Any]]] = None,
 ) -> List[SectionBuildResult]:
     """
     Genera header + tutte le 18 macroaree V2 (allineate al prompt universale).
+    Se `unprocessed_files` non e' vuoto, aggiunge in coda la sezione
+    "DOCUMENTI NON ELABORATI" (section_index=99).
 
     Returns:
         Lista di SectionBuildResult, ordinati per section_index.
@@ -621,6 +751,11 @@ def build_all_sections(
     for i, macroarea in enumerate(MACROAREA_ORDER, start=1):
         results.append(build_macroarea_section(
             parsed_data, macroarea, i, session_id, base_dir,
+        ))
+
+    if unprocessed_files:
+        results.append(build_unprocessed_section(
+            unprocessed_files, session_id, base_dir,
         ))
 
     return results

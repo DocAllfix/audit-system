@@ -6,12 +6,12 @@ Versione minimale del pipeline V2 che:
   gemini_ocr_v2, yaml_parser, incremental_docx_builder, docx_merger di V2
   (zero modifiche)
 - Bypassa cache_manager (DeepSeek caching automatico)
-- Usa spike_deepseek.deepseek_client invece di gemini_client_v2
-- Carica il prompt da `universal_evidence_prompt_spike_deepseek_{v1|v2}.md`
+- Usa spike_llm.deepseek_client invece di gemini_client_v2
+- Carica il prompt da `universal_evidence_prompt_spike_llm_{v1|v2}.md`
 - Cap doc + batch + workers parametrici via env var SPIKE_*
 
 Output:
-- temp/spike_deepseek/docx_outputs/spike_<sess>_final.docx
+- temp/spike_llm/<provider>/docx_outputs/spike_<sess>_final.docx
 - report dict con metriche (passato al runner per persistenza JSON)
 """
 from __future__ import annotations
@@ -24,37 +24,40 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# Costanti spike (sovrascrivibili via env var nel runner)
-DEFAULT_BATCH_MAX_FILES = int(os.environ.get("SPIKE_DEEPSEEK_BATCH_MAX_FILES", "12"))
-DEFAULT_BATCH_MAX_CHARS = int(os.environ.get("SPIKE_DEEPSEEK_BATCH_MAX_CHARS", "200000"))
-DEFAULT_MAX_WORKERS = int(os.environ.get("SPIKE_DEEPSEEK_MAX_WORKERS", "14"))
-
-
 def process_zip_spike(
     zip_bytes: bytes,
     session_id: str,
-    deepseek_api_key: str,
+    deepseek_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
     output_dir: Optional[Path] = None,
+    provider: str = "deepseek-v4-flash",
 ) -> Dict[str, Any]:
     """
-    Pipeline spike DeepSeek V4 Flash standalone.
+    Pipeline spike multi-provider standalone.
 
     Fasi:
     1. Estrazione ZIP (riuso v2.zip_extractor)
     2. Triage native PDF (riuso v2.file_triage)
     3. Text handlers non-PDF (riuso v2.text_handlers)
-    4. Classify (riuso v2.document_classifier — SU GEMINI Flash-Lite, non DeepSeek)
-    5. OCR (riuso v2.gemini_ocr_v2 — SU GEMINI Vision, non DeepSeek)
+    4. Classify (riuso v2.document_classifier — SU GEMINI Flash-Lite, sempre)
+    5. OCR (riuso v2.gemini_ocr_v2 — SU GEMINI Vision, sempre)
     6. Costruzione documents
-    7. Smart batching (max_files=12, max_chars=200K)
-    8. Analyze su DeepSeek V4 Flash con 14 worker paralleli
+    7. Smart batching (parametri da ProviderProfile)
+    8. Analyze sul provider scelto via client_dispatch
     9. Parse YAML aggregato (riuso v2.yaml_parser)
     10. Build docx (riuso v2.incremental_docx_builder)
     11. Merge finale (riuso v2.docx_merger)
 
+    Args:
+        provider: chiave ProviderProfile da usare per analyze. Default
+            "deepseek-v4-flash" per backward compat.
+        deepseek_api_key: chiave DeepSeek (richiesta solo se provider=deepseek-v4-flash).
+        gemini_api_key: chiave Gemini (sempre richiesta per classify+OCR; e
+            obbligatoria anche come "client" per provider=gemini-baseline).
+
     Returns:
-        Dict con success, output_path, company_name, stats e metriche.
+        Dict con success, output_path, company_name, stats e metriche
+        (incluso provider, batch params, n_truncated_responses).
     """
     import sys
     if "v2" not in sys.modules:
@@ -79,23 +82,32 @@ def process_zip_spike(
     from v2.incremental_docx_builder import (
         build_all_sections, builder_summary, cleanup_session_sections,
     )
-    from v2.docx_merger import merge_section_partials
-    from v2.genai_factory_v2 import create_client as create_gemini_client
+    from v2.docx_merger import merge_session_sections
+    from v2.genai_factory_v2 import create_genai_client_v2 as create_gemini_client
     from v2 import token_meter
     from v2.relevance_safetynet import apply_safety_net
 
     # Spike-specific imports
-    from spike_deepseek.deepseek_client import (
-        DeepSeekClient, analyze_batch_streaming, _create_smart_batches_spike,
-    )
+    from spike_llm.deepseek_client import _create_smart_batches_spike
+    from spike_llm.provider_profiles import get_profile
+    from spike_llm.client_dispatch import build_client, get_client_module
 
-    # Output dir
+    # Risolve profilo provider
+    profile = get_profile(provider)
+    profile_batch_max_files = profile.batch_max_files
+    profile_batch_max_chars = profile.batch_max_chars
+    profile_max_workers = profile.max_workers
+
+    # Output dir per-provider
     if output_dir is None:
-        output_dir = Path(__file__).resolve().parent.parent.parent / "temp" / "spike_deepseek" / "docx_outputs"
+        output_dir = (
+            Path(__file__).resolve().parent.parent.parent
+            / "temp" / "spike_llm" / profile.key / "docx_outputs"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── FASE 1: Ingestion ZIP ───────────────────────────────────────────
-    extract_dir, files = extract_zip_bytes(zip_bytes, session_id)
+    files, extract_dir = extract_zip_bytes(zip_bytes, session_id)
     if not files:
         return {"success": False, "error": "zip_empty_or_no_files"}
 
@@ -157,7 +169,7 @@ def process_zip_spike(
 
     # ── FASE 6: Safety net + costruzione documents ────────────────────
     skipped_filenames: set = set()
-    if classified and os.environ.get("SPIKE_DEEPSEEK_SKIP_NOISE", "false").lower() == "true":
+    if classified and os.environ.get("SPIKE_LLM_SKIP_NOISE", os.environ.get("SPIKE_DEEPSEEK_SKIP_NOISE", "false")).lower() == "true":
         files_index = {
             f["filename"]: f
             for f in (triaged.get(KEY_NATIVE, []) + needs_ocr_files + non_pdf_with_text)
@@ -180,48 +192,117 @@ def process_zip_spike(
         cleanup_extraction(extract_dir)
         return {"success": False, "error": "no_extractable_documents"}
 
-    # ── FASE 7: Smart batching (parametri SPIKE) ────────────────────────
+    # ── FASE 7: Smart batching (parametri da ProviderProfile) ──────────
     batches = _create_smart_batches_spike(
         documents,
-        max_files=DEFAULT_BATCH_MAX_FILES,
-        max_chars=DEFAULT_BATCH_MAX_CHARS,
+        max_files=profile_batch_max_files,
+        max_chars=profile_batch_max_chars,
     )
 
-    # ── FASE 8: Analyze su DeepSeek V4 Flash ──────────────────────────
-    deepseek_client = DeepSeekClient(api_key=deepseek_api_key)
+    # ── FASE 8: Analyze sul provider scelto (dispatch + fallback Gemini su 429) ────
+    analyze_client = build_client(
+        profile,
+        deepseek_api_key=deepseek_api_key,
+        gemini_api_key=gemini_api_key,
+    )
+    client_module = get_client_module(profile)
+
+    # Fallback: se il provider primario è Azure e Gemini key è disponibile,
+    # prepariamo un secondo client Gemini per i batch che esauriscono i retry 429.
+    fallback_enabled = (
+        profile.api_kind == "azure_openai"
+        and gemini_api_key
+        and os.environ.get("SPIKE_LLM_DISABLE_FALLBACK", "0") != "1"
+    )
+    fallback_client = None
+    fallback_module = None
+    if fallback_enabled:
+        try:
+            from spike_llm.provider_profiles import get_profile as _get_profile
+            from spike_llm.client_dispatch import build_client as _build, get_client_module as _get_module
+            _fb_profile = _get_profile("gemini-baseline")
+            fallback_client = _build(_fb_profile, gemini_api_key=gemini_api_key)
+            fallback_module = _get_module(_fb_profile)
+            print(f"[SPIKE/{profile.key}] Fallback Gemini abilitato (su 429 esauriti)")
+        except Exception as e:
+            print(f"[SPIKE/{profile.key}] Fallback Gemini non inizializzabile: {e}")
+            fallback_enabled = False
+
     print(
-        f"[SPIKE] Batch split: docs={len(documents)} → batches={len(batches)} "
-        f"(max_files={DEFAULT_BATCH_MAX_FILES}, max_chars={DEFAULT_BATCH_MAX_CHARS}). "
-        f"Workers={DEFAULT_MAX_WORKERS}. Prompt variant={os.environ.get('SPIKE_PROMPT_VARIANT', 'v2')}"
+        f"[SPIKE/{profile.key}] Batch split: docs={len(documents)} → batches={len(batches)} "
+        f"(max_files={profile_batch_max_files}, max_chars={profile_batch_max_chars}). "
+        f"Workers={profile_max_workers}. Prompt variant={os.environ.get('SPIKE_PROMPT_VARIANT', 'v2')}"
     )
 
     analyze_start = time.monotonic()
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_workers = min(DEFAULT_MAX_WORKERS, max(1, len(batches)))
+    max_workers = min(profile_max_workers, max(1, len(batches)))
     results_by_idx: Dict[int, str] = {}
+    n_truncated_responses = 0
+    fallback_batches: List[int] = []  # idx dei batch ricorsi a Gemini
 
     def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]]):
-        result = analyze_batch_streaming(
-            client=deepseek_client,
-            batch_docs=batch_docs,
-            batch_idx=idx,
-            total_docs=len(documents),
-            meter_session_id=session_id,
-            compact_mode=False,  # spike non usa compact, vuole massimo dettaglio
-        )
-        return idx, result
+        # Tentativo primario sul provider scelto
+        try:
+            result = client_module.analyze_batch_streaming(
+                client=analyze_client,
+                batch_docs=batch_docs,
+                batch_idx=idx,
+                total_docs=len(documents),
+                meter_session_id=session_id,
+                compact_mode=False,
+            )
+            return idx, result, False  # fallback_used=False
+        except Exception as e:
+            # Detect AzureRateLimitExhausted (sollevata solo dal client Azure).
+            # Se è 429 esaurito e fallback è abilitato → ritenta su Gemini.
+            from spike_llm.azure_openai_client import AzureRateLimitExhausted
+            if isinstance(e, AzureRateLimitExhausted) and fallback_enabled:
+                print(
+                    f"[SPIKE/{profile.key}] batch {idx} esaurito su Azure (429), "
+                    f"FALLBACK → gemini-baseline"
+                )
+                try:
+                    fb_result = fallback_module.analyze_batch_streaming(
+                        client=fallback_client,
+                        batch_docs=batch_docs,
+                        batch_idx=idx,
+                        total_docs=len(documents),
+                        meter_session_id=session_id,
+                        compact_mode=False,
+                    )
+                    return idx, fb_result, True  # fallback_used=True
+                except Exception as fb_exc:
+                    print(f"[SPIKE/{profile.key}] FALLBACK GEMINI fallito su batch {idx}: {fb_exc}")
+                    # Ritorno StreamResult vuoto con error
+                    from v2.stream_buffer import StreamResult as _SR
+                    return idx, _SR(text="", error=f"primary_429_fallback_failed: {fb_exc}"), True
+            # Errore non rate-limit o fallback disabilitato → propaga come error result
+            from v2.stream_buffer import StreamResult as _SR
+            return idx, _SR(text="", error=f"unhandled_exception: {e}"), False
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_analyze_one, i, b): i for i, b in enumerate(batches)}
         for fut in as_completed(futures):
             try:
-                idx, result = fut.result()
+                idx, result, used_fallback = fut.result()
+                if used_fallback:
+                    fallback_batches.append(idx)
                 if result and result.text and not result.error:
                     results_by_idx[idx] = result.text
+                    if getattr(result, "truncated_output", False):
+                        n_truncated_responses += 1
+                        print(f"[SPIKE/{profile.key}] batch {idx} TRUNCATED (output cap raggiunto)")
                 else:
-                    print(f"[SPIKE] batch {idx} error: {result.error if result else 'unknown'}")
+                    print(f"[SPIKE/{profile.key}] batch {idx} error: {result.error if result else 'unknown'}")
             except Exception as e:
-                print(f"[SPIKE] batch_analyze unexpected: {e}")
+                print(f"[SPIKE/{profile.key}] batch_analyze unexpected: {e}")
+
+    if fallback_batches:
+        print(
+            f"[SPIKE/{profile.key}] FALLBACK Gemini usato per "
+            f"{len(fallback_batches)}/{len(batches)} batch: {sorted(fallback_batches)}"
+        )
 
     raw_yamls = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
     analyze_duration = time.monotonic() - analyze_start
@@ -229,6 +310,18 @@ def process_zip_spike(
     if not raw_yamls:
         cleanup_extraction(extract_dir)
         return {"success": False, "error": "no_yaml_output"}
+
+    # ── FASE 8.5: Dump raw YAML su disco (debug malformations) ─────────
+    # Ogni batch viene salvato come file separato in <output_dir_parent>/raw_yamls/.
+    # Permette analisi post-mortem dei batch droppati dal parser.
+    try:
+        raw_dump_dir = output_dir.parent / "raw_yamls"
+        raw_dump_dir.mkdir(parents=True, exist_ok=True)
+        for idx, raw in enumerate(raw_yamls):
+            (raw_dump_dir / f"batch_{idx:03d}.yaml").write_text(raw, encoding="utf-8")
+        print(f"[SPIKE/{profile.key}] {len(raw_yamls)} raw YAML salvati in {raw_dump_dir}")
+    except Exception as e:
+        print(f"[SPIKE/{profile.key}] raw_yaml_dump failed (non-blocking): {e}")
 
     # ── FASE 9: Parse YAML aggregato ──────────────────────────────────
     full_yaml = "\n\n---\n\n".join(raw_yamls)
@@ -238,6 +331,14 @@ def process_zip_spike(
     parse_failures = get_last_parse_failures()
     if parse_failures:
         print(f"[SPIKE] {len(parse_failures)} batch YAML saltati")
+        # Salva anche la lista dei batch falliti
+        try:
+            (raw_dump_dir / "_parse_failures.txt").write_text(
+                "\n".join(str(f) for f in parse_failures),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     # ── FASE 10: Build docx + merge ────────────────────────────────────
     docs_estratti = len(documents)
@@ -253,10 +354,10 @@ def process_zip_spike(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_company = "".join(c for c in (company_name or "AUDIT") if c.isalnum() or c == " ")[:30]
     safe_company = safe_company.replace(" ", "_") or "AUDIT"
-    final_filename = f"spike_{session_id}_{safe_company}_{timestamp}.docx"
+    final_filename = f"spike_{profile.key}_{safe_company}_{timestamp}.docx"
     final_path = output_dir / final_filename
 
-    merge_result = merge_section_partials(
+    merge_result = merge_session_sections(
         session_id=session_id,
         output_path=final_path,
     )
@@ -280,6 +381,7 @@ def process_zip_spike(
 
     return {
         "success": True,
+        "provider": profile.key,
         "output_path": str(final_path),
         "output_size_kb": output_size_kb,
         "company_name": company_name,
@@ -295,9 +397,15 @@ def process_zip_spike(
         "n_batches": len(batches),
         "n_documents": len(documents),
         "n_parse_failures": len(parse_failures),
+        "n_truncated_responses": n_truncated_responses,
         "build_summary": build_sum,
         "prompt_variant": os.environ.get("SPIKE_PROMPT_VARIANT", "v2"),
-        "batch_max_files": DEFAULT_BATCH_MAX_FILES,
-        "batch_max_chars": DEFAULT_BATCH_MAX_CHARS,
-        "max_workers": DEFAULT_MAX_WORKERS,
+        "batch_max_files": profile_batch_max_files,
+        "batch_max_chars": profile_batch_max_chars,
+        "max_workers": profile_max_workers,
+        # Telemetria fallback Gemini (S3 — 429 recovery)
+        "fallback_enabled": fallback_enabled,
+        "n_fallback_batches": len(fallback_batches),
+        "fallback_batch_idxs": sorted(fallback_batches),
+        "fallback_provider": "gemini-baseline" if fallback_enabled else None,
     }

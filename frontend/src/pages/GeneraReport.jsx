@@ -146,7 +146,7 @@ export default function GeneraReport() {
     const form = new FormData();
     form.append('file', file);
 
-    await sse.start('/api/report/process', form, {
+    await sse.start('/api/v2/report/process?legacy_events=true', form, {
       onDone: (data) => {
         setResult(data);
         const detectedName = data.company_name || '';
@@ -159,6 +159,16 @@ export default function GeneraReport() {
         queryClient.invalidateQueries({ queryKey: ['all-practices'] });
         queryClient.invalidateQueries({ queryKey: ['practices'] });
         confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 }, colors: ['#14b8a6', '#22c55e'] });
+        // FIX 14c: auto-download del docx appena la run e' completata, cosi'
+        // l'utente NON deve cercare il bottone "Scarica" — il file scende
+        // direttamente. Il bottone resta comunque per ri-scaricare in seguito.
+        try {
+          if (data.word_base64 && data.filename) {
+            downloadBase64File(data.word_base64, data.filename, WORD_MIME);
+          }
+        } catch (e) {
+          console.warn('Auto-download fallito:', e);
+        }
       },
       onError: (err) => {
         setPhase('input');
@@ -193,6 +203,7 @@ export default function GeneraReport() {
 
   const stats = result?.stats || {};
   const logSummary = stats.log_summary || {};
+  const isNarrative = stats.output_mode === 'narrative';
 
   /* ── Render ─────────────────────────────────────────────────────────────── */
   return (
@@ -303,6 +314,27 @@ export default function GeneraReport() {
                   progress={sse.progress}
                   message={sse.message}
                 />
+                {/* Fix 10 — ETA + alive indicator */}
+                <div className="mt-4 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${
+                        sse.isStalled ? 'bg-amber-400 animate-pulse' : 'bg-green-500 animate-pulse'
+                      }`}
+                      aria-label={sse.isStalled ? 'in attesa' : 'attivo'}
+                    />
+                    <span className="text-muted-foreground">
+                      {sse.isStalled
+                        ? 'Sistema attivo, in attesa di risposta dal modello…'
+                        : 'In elaborazione live'}
+                    </span>
+                  </div>
+                  {sse.etaText && (
+                    <div className="text-muted-foreground">
+                      Tempo stimato rimanente: <span className="font-medium text-foreground">{sse.etaText}</span>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
             <Card className="glass border-primary/20 bg-primary/5">
@@ -320,7 +352,53 @@ export default function GeneraReport() {
         {phase === 'results' && result && (
           <motion.div key="results" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4">
 
-            {(stats.paragraphs_generated || stats.total_paragraphs) && (
+            {/* ── Stats modalità narrativa ─────────────────────────── */}
+            {isNarrative && (
+              <>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'Documenti analizzati', value: stats.documents_with_text ?? 0 },
+                    { label: 'Paragrafi generati',   value: stats.n_paragraphs ?? 0 },
+                    {
+                      label: 'Legge 1 doc → 1 §',
+                      value: stats.documents_with_text > 0
+                        ? (stats.n_paragraphs >= stats.documents_with_text ? '✓ OK' : `⚠ ${stats.n_paragraphs}/${stats.documents_with_text}`)
+                        : '—',
+                    },
+                  ].map(s => (
+                    <Card key={s.label} className="glass">
+                      <CardContent className="p-3 text-center">
+                        <p className={`text-2xl font-bold ${s.label === 'Legge 1 doc → 1 §' && String(s.value).startsWith('⚠') ? 'text-amber-500' : ''}`}>{s.value}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+                <Card className="glass">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-semibold flex items-center gap-2">
+                      <BarChart3 className="w-3.5 h-3.5 text-primary" /> Riepilogo Run Narrativa
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-0">
+                    {[
+                      { label: 'File nello ZIP',    value: stats.total_files_in_zip ?? 0 },
+                      { label: 'Con testo',         value: stats.documents_with_text ?? 0 },
+                      { label: 'Batch fallback',    value: stats.n_fallback_batches ?? 0 },
+                      { label: 'Non elaborati',     value: stats.n_unprocessed_files ?? 0 },
+                    ].map(s => (
+                      <div key={s.label} className="text-center">
+                        <p className={`text-lg font-bold ${(s.label === 'Batch fallback' || s.label === 'Non elaborati') && s.value > 0 ? 'text-amber-500' : ''}`}>{s.value}</p>
+                        <p className="text-xs text-muted-foreground">{s.label}</p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              </>
+            )}
+
+            {/* ── Stats modalità strutturata (vecchio path) ────────────── */}
+            {!isNarrative && (stats.paragraphs_generated || stats.total_paragraphs) && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
                   { label: 'Paragrafi',         value: stats.paragraphs_generated ?? stats.total_paragraphs ?? 0 },
@@ -338,7 +416,7 @@ export default function GeneraReport() {
               </div>
             )}
 
-            {logSummary.files_in_zip && (
+            {!isNarrative && logSummary.files_in_zip && (
               <Card className="glass">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-xs font-semibold flex items-center gap-2">

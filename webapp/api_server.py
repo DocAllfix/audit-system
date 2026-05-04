@@ -596,6 +596,7 @@ async def v2_health():
     return process_v2_stub()
 
 
+
 @app.post("/api/v2/report/process")
 async def v2_process_report(
     file: UploadFile = File(...),
@@ -681,6 +682,7 @@ async def v2_process_report(
                     api_key=api_key,
                     emitter=emitter,
                     dry_run=dry_run,
+                    zip_filename=file.filename or "",
                 )
             except BaseException as e:
                 # Cattura ANCHE BaseException (MemoryError, SystemExit, ecc.)
@@ -734,6 +736,13 @@ async def v2_process_report(
 
                         done_payload = {
                             "type": "done_with_payload",
+                            # FIX 14: il frontend useSSEProcess controlla
+                            # event.done == true per chiudere il loop SSE e
+                            # invocare onDone(). Senza questo flag il payload
+                            # finale viene interpretato come "progress event"
+                            # con pct=undefined → setProgress(0) e la UI
+                            # sembra "ripartire da zero" alla fine della run.
+                            "done": True,
                             "session_id": session_id,
                             "filename": result.get("output_filename"),
                             "word_base64": base64.b64encode(word_bytes).decode(),

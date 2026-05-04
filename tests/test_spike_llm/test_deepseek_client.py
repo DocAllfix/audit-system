@@ -29,7 +29,7 @@ _WEBAPP_DIR = _REPO_ROOT / "webapp"
 if str(_WEBAPP_DIR) not in sys.path:
     sys.path.insert(0, str(_WEBAPP_DIR))
 
-from spike_deepseek import deepseek_client as dsc
+from spike_llm import deepseek_client as dsc
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -111,19 +111,19 @@ def test_smart_batches_spike_empty_input():
 def test_resolve_prompt_path_default_v2(monkeypatch):
     monkeypatch.delenv("SPIKE_PROMPT_VARIANT", raising=False)
     p = dsc._resolve_prompt_path()
-    assert "spike_deepseek_v2.md" in str(p)
+    assert "spike_llm_v2.md" in str(p)
 
 
 def test_resolve_prompt_path_v1(monkeypatch):
     monkeypatch.setenv("SPIKE_PROMPT_VARIANT", "v1")
     p = dsc._resolve_prompt_path()
-    assert "spike_deepseek_v1.md" in str(p)
+    assert "spike_llm_v1.md" in str(p)
 
 
 def test_resolve_prompt_path_v2_explicit(monkeypatch):
     monkeypatch.setenv("SPIKE_PROMPT_VARIANT", "v2")
     p = dsc._resolve_prompt_path()
-    assert "spike_deepseek_v2.md" in str(p)
+    assert "spike_llm_v2.md" in str(p)
 
 
 def test_load_universal_prompt_v1_contains_regola_preliminare(monkeypatch):

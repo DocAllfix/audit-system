@@ -66,7 +66,7 @@ PRICING: Dict[str, Dict[str, Optional[float]]] = {
         "output": 0.0,
         "cached_input": None,
     },
-    # DeepSeek V4 Flash — usato dallo spike `webapp/spike_deepseek/`.
+    # DeepSeek V4 Flash — usato dallo spike `webapp/spike_llm/`.
     # Pricing ufficiale 2026/04/26 (cache hit ridotto a 1/10 del prezzo lancio).
     # Ref: https://api-docs.deepseek.com/quick_start/pricing
     "deepseek-v4-flash": {
@@ -80,6 +80,22 @@ PRICING: Dict[str, Dict[str, Optional[float]]] = {
         "input": 0.435,
         "output": 0.87,
         "cached_input": 0.003625,
+    },
+    # Azure OpenAI GPT-4.1-mini — usato dallo spike `webapp/spike_llm/`.
+    # 1M context, 32K output cap. GDPR-compliant via Azure EU Data Boundary.
+    # Caching automatico per prefissi >= 1024 token (sconto 75% sul cached input).
+    "gpt-4.1-mini": {
+        "input": 0.40,
+        "output": 1.60,
+        "cached_input": 0.10,
+    },
+    # Azure OpenAI GPT-4o-mini — usato dallo spike `webapp/spike_llm/`.
+    # 128K context, 16K output cap (HARD limit, batch ridotti obbligatori).
+    # GDPR-compliant via Azure EU Data Boundary.
+    "gpt-4o-mini": {
+        "input": 0.15,
+        "output": 0.60,
+        "cached_input": 0.075,
     },
 }
 

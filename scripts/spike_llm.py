@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 """
-Spike runner: V2 pipeline su DeepSeek V4 Flash.
+Spike runner: V2 pipeline su singolo provider LLM (debug / smoke test).
 
 Usage:
     # Variante prompt V2 (default, 6 fix Fase 2)
-    python scripts/spike_deepseek_v4_flash.py "ALLEGATI MEDIL.zip"
+    python scripts/spike_llm.py --provider deepseek-v4-flash "ALLEGATI MEDIL.zip"
 
     # Variante prompt V1 (PROD originale, niente fix V2)
-    SPIKE_PROMPT_VARIANT=v1 python scripts/spike_deepseek_v4_flash.py "ALLEGATI SIRIH.zip"
+    SPIKE_PROMPT_VARIANT=v1 python scripts/spike_llm.py \\
+        --provider deepseek-v4-flash "ALLEGATI SIRIH.zip"
 
     # Override soglie spike
     SPIKE_DEEPSEEK_MAX_WORKERS=20 SPIKE_DEEPSEEK_BATCH_MAX_FILES=16 \\
-        python scripts/spike_deepseek_v4_flash.py "ZIP.zip"
+        python scripts/spike_llm.py --provider deepseek-v4-flash "ZIP.zip"
 
-Env var richieste:
+Env var richieste (per DeepSeek; per altri provider vedi spike_llm_orchestrate.py):
     DEEPSEEK_API_KEY    chiave DeepSeek (https://platform.deepseek.com/)
     GEMINI_API_KEY      chiave Gemini (per classifier + OCR, riusati da V2)
 
 Output:
-    temp/spike_deepseek/reports/spike_<timestamp>.json
-    temp/spike_deepseek/docx_outputs/spike_<sess>_<company>_<ts>.docx
+    temp/spike_llm/<provider>/reports/spike_<timestamp>.json
+    temp/spike_llm/<provider>/docx_outputs/spike_<sess>_<company>_<ts>.docx
 
-Il report JSON ha campi compatibili con `temp/comparison/report_*.json`
-per facilitare il confronto con le run V2/V1.
+Per benchmark multi-provider (4 provider × N pratiche in parallelo) usare
+`scripts/spike_llm_orchestrate.py`.
 """
 from __future__ import annotations
 
@@ -117,7 +118,7 @@ def main() -> int:
     print(f"  Max chars/batch: {os.environ.get('SPIKE_DEEPSEEK_BATCH_MAX_CHARS', '200000')}")
     print("=" * 70)
 
-    from spike_deepseek.pipeline_spike import process_zip_spike
+    from spike_llm.pipeline_spike import process_zip_spike
     from v2 import token_meter
 
     session_id = f"spike_{int(time.time())}"
@@ -144,7 +145,7 @@ def main() -> int:
 
     # Salva report JSON
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_dir = _REPO_ROOT / "temp" / "spike_deepseek" / "reports"
+    report_dir = _REPO_ROOT / "temp" / "spike_llm" / "deepseek-v4-flash" / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     report = {

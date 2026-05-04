@@ -63,7 +63,7 @@ _WEBAPP_DIR = Path(__file__).resolve().parent.parent
 def _resolve_prompt_path() -> Path:
     """Risolve la variante del prompt spike da env."""
     variant = os.environ.get("SPIKE_PROMPT_VARIANT", "v2").strip().lower()
-    fname = f"universal_evidence_prompt_spike_deepseek_{variant}.md"
+    fname = f"universal_evidence_prompt_spike_llm_{variant}.md"
     return _WEBAPP_DIR / "prompts" / fname
 
 
