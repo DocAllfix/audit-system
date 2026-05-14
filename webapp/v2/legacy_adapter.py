@@ -113,9 +113,18 @@ class LegacyAdapter:
                 detail = event.get("detail") or {}
                 completed = detail.get("completed", "")
                 total = detail.get("total", "")
+                current_file = detail.get("current_file", "")
+                waiting = detail.get("waiting", False)
                 msg_label = _PHASE_MESSAGES.get(phase, phase)
-                if completed and total:
+                if phase == "ingestion" and current_file:
+                    extracted = detail.get("extracted", "")
+                    msg = f"Estrazione: {current_file}" + (f" ({extracted} file)" if extracted else "")
+                elif phase == "ocr" and waiting:
+                    msg = f"OCR in corso — attendere..."
+                elif completed and total:
                     msg = f"{msg_label} {completed}/{total}..."
+                elif current_file:
+                    msg = f"{msg_label}: {current_file}"
                 else:
                     msg = f"{msg_label}..."
                 return {"pct": pct, "msg": msg}

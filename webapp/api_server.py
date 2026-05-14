@@ -424,15 +424,18 @@ async def process_report(
     file: UploadFile = File(...),
     user: Dict = Depends(_get_current_user),
 ):
-    """
-    Riceve file ZIP, processa con Gemini, streamma il progresso reale via SSE.
+    """DEPRECATO — risponde subito con errore SSE senza elaborare nulla."""
+    import json as _json
+    async def _err():
+        yield f"data: {_json.dumps({'error': 'Pagina non aggiornata: ricarica il browser con Ctrl+Shift+R e riprova.'}, ensure_ascii=False)}\n\n"
+    return StreamingResponse(_err(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    Stream di eventi SSE:
-      data: {"pct": 12, "msg": "Estrazione documenti..."}
-      data: {"pct": 45, "msg": "Analisi AI batch 3/8..."}
-      data: {"done": true, "filename": "...", "word_base64": "...", "stats": {...}, "company_name": "..."}
-      data: {"error": "messaggio errore"}
-    """
+async def _process_report_legacy_disabled(
+    file: UploadFile = File(...),
+    user: Dict = Depends(_get_current_user),
+):
+    """Corpo legacy disabilitato — tenuto per riferimento."""
     from modules.report_generator import process_zip_and_generate_report
 
     api_key = GEMINI_API_KEY

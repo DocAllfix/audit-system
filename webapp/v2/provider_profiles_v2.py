@@ -54,9 +54,9 @@ PROFILES: dict[str, ProviderProfile] = {
         context_window=1_000_000,
         max_output_tokens=32_000,
         batch_max_files=10,
-        batch_max_chars=180_000,
+        batch_max_chars=100_000,
         doc_cap_multiplier=2.5,
-        max_workers=6,
+        max_workers=4,
     ),
 }
 

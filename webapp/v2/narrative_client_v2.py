@@ -499,3 +499,78 @@ def analyze_batch_narrative(
         for i, doc in enumerate(batch_docs)
     ]
     return paragraphs, False
+
+
+def analyze_batch_narrative_gemini(
+    gemini_client,
+    batch_docs: List[Dict[str, Any]],
+    batch_idx: int,
+    total_docs: int,
+    para_start: int,
+    verb_idx: int,
+    narrative_prompt: str,
+    meter_session_id: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """
+    Variante Gemini di analyze_batch_narrative.
+    Usata come fallback quando Azure va in 429 in modalità narrative.
+    Stessa struttura prompt/output, API Gemini generate_content (non streaming).
+    """
+    if not batch_docs:
+        return [], False
+
+    verb = _VERBS[verb_idx % len(_VERBS)]
+
+    # Gemini non ha profilo doc_cap_multiplier — usa 1.0
+    class _FakeProfile:
+        doc_cap_multiplier = 1.0
+
+    class _FakeClient:
+        profile = _FakeProfile()
+
+    user_prompt = _build_narrative_user_prompt(
+        batch_docs=batch_docs,
+        batch_idx=batch_idx,
+        total_docs=total_docs,
+        para_start=para_start,
+        verb=verb,
+        doc_cap_multiplier=1.0,
+    )
+    user_prompt = _sanitize_text(user_prompt)
+    sys_prompt = _sanitize_text(narrative_prompt)
+
+    full_prompt = f"{sys_prompt}\n\n{user_prompt}" if sys_prompt else user_prompt
+
+    try:
+        from google.genai import types as _gtypes
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+            config=_gtypes.GenerateContentConfig(
+                max_output_tokens=32000,
+                temperature=0.3,
+            ),
+        )
+        raw_text = response.text or ""
+    except Exception as e:
+        print(f"[V2 NARRATIVE GEMINI] Batch {batch_idx} errore: {e}")
+        return [
+            _make_placeholder(para_start + i, doc.get("filename", f"doc_{i}"))
+            for i, doc in enumerate(batch_docs)
+        ], False
+
+    paragraphs = _parse_json_narrative_response(raw_text, batch_idx)
+    if not paragraphs:
+        paragraphs = [
+            _make_placeholder(para_start + i, doc.get("filename", f"doc_{i}"))
+            for i, doc in enumerate(batch_docs)
+        ]
+
+    for i, p in enumerate(paragraphs):
+        p["numero"] = para_start + i
+
+    print(
+        f"[V2 NARRATIVE GEMINI] Batch {batch_idx}: {len(paragraphs)} paragrafi "
+        f"(fallback, verb={verb})"
+    )
+    return paragraphs, True

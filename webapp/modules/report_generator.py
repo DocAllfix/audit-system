@@ -444,53 +444,74 @@ def generate_report_word(paragraphs: List[Dict], stats: Dict, company_name: str 
     from docx.shared import Pt, Inches, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     
+    import re as _re
+
+    _XML_ILLEGAL = _re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f￾￿]")
+
+    def _xml_safe(s) -> str:
+        return _XML_ILLEGAL.sub("", str(s or ""))
+
+    def _deep_sanitize(obj):
+        """Sanitize ricorsivo: tocca ogni stringa a qualsiasi profondità."""
+        if isinstance(obj, str):
+            return _XML_ILLEGAL.sub("", obj)
+        if isinstance(obj, dict):
+            return {k: _deep_sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_deep_sanitize(x) for x in obj]
+        return obj
+
+    # Sanitize completo di tutti i paragrafi prima di toccare il docx
+    paragraphs = [_deep_sanitize(p) for p in (paragraphs or [])]
+    company_name = _xml_safe(company_name)
+
     doc = Document()
-    
+
     # Imposta margini
     for section in doc.sections:
         section.top_margin = Cm(2.5)
         section.bottom_margin = Cm(2.5)
         section.left_margin = Cm(2.5)
         section.right_margin = Cm(2.5)
-    
+
     # TITOLO
     title = doc.add_heading("RELAZIONE DI EVIDENZE DI AUDIT", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
+
     # Sottotitolo con nome azienda
     if company_name:
-        subtitle = doc.add_paragraph(f"Audit - {company_name}")
+        subtitle = doc.add_paragraph(f"Audit - {_xml_safe(company_name)}")
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
+
     # INTESTAZIONE OBBLIGATORIA
     doc.add_paragraph()
     header_para = doc.add_paragraph()
     header_para.add_run(f"Data: {datetime.now().strftime('%d/%m/%Y')}\n").bold = True
-    header_para.add_run(f"Documenti estratti: {stats.get('total_docs', len(paragraphs))}\n")
-    header_para.add_run(f"Documenti analizzati: {stats.get('total_paragraphs', len(paragraphs))}\n")
+    header_para.add_run(f"Documenti estratti: {_xml_safe(stats.get('total_docs', len(paragraphs)))}\n")
+    header_para.add_run(f"Documenti analizzati: {_xml_safe(stats.get('total_paragraphs', len(paragraphs)))}\n")
     header_para.add_run(f"Media parole per paragrafo: {stats.get('avg_words', 0):.0f}\n")
-    
+
     doc.add_paragraph()
-    doc.add_paragraph("─" * 50)
+    doc.add_paragraph("-" * 50)
     doc.add_paragraph()
-    
+
     # PARAGRAFI
     current_category = None
     for para in paragraphs:
         # Categoria (se presente)
-        category = para.get("categoria", "")
+        category = _xml_safe(para.get("categoria", ""))
         if category and category != current_category:
             doc.add_heading(category, 1)
             current_category = category
-        
+
         # Sottotitolo numerato
-        numero = para.get("numero", "")
-        sottotitolo = para.get("sottotitolo", "")
+        numero = _xml_safe(para.get("numero", ""))
+        sottotitolo = _xml_safe(para.get("sottotitolo", ""))
         heading_text = f"[{numero}] {sottotitolo}" if numero else sottotitolo
         doc.add_heading(heading_text, 2)
-        
+
         # Contenuto
-        contenuto = para.get("contenuto", "")
+        contenuto = _xml_safe(para.get("contenuto", ""))
         content_para = doc.add_paragraph(contenuto)
         content_para.paragraph_format.line_spacing = 1.5
         content_para.paragraph_format.space_after = Pt(12)

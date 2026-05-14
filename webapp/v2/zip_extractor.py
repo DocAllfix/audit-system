@@ -172,6 +172,7 @@ def _extract_single_zip(
     extract_dir: Path,
     depth: int,
     state: Dict[str, int],
+    on_file=None,
 ) -> List[Dict[str, Any]]:
     """
     Estrae un ZIP. Aggiorna lo state condiviso (counter file/bytes/depth) per
@@ -257,6 +258,11 @@ def _extract_single_zip(
                         "size": size,
                         "category": category,
                     })
+                    if on_file:
+                        try:
+                            on_file(fname, state["files"])
+                        except Exception:
+                            pass
     except zipfile.BadZipFile as e:
         # Solo per ZIP root il caller può decidere; per nested logghiamo
         if depth == 0:
@@ -270,7 +276,7 @@ def _extract_single_zip(
             os.makedirs(_to_long_path(nested_extract_dir), exist_ok=True)
         except OSError:
             continue
-        nested_files = _extract_single_zip(nested, nested_extract_dir, depth + 1, state)
+        nested_files = _extract_single_zip(nested, nested_extract_dir, depth + 1, state, on_file=on_file)
         extracted.extend(nested_files)
         # Rimuovi il ZIP nested dopo l'estrazione (evita che venga incluso come file)
         try:
@@ -289,6 +295,7 @@ def extract_zip_bytes(
     zip_bytes: bytes,
     session_id: str,
     base_dir: Path = None,
+    on_file=None,
 ) -> Tuple[List[Dict[str, Any]], Path]:
     """
     Estrae bytes ZIP in directory temporanea isolata per session_id.
@@ -325,7 +332,7 @@ def extract_zip_bytes(
 
     state = {"files": 0, "bytes": 0}
     try:
-        files = _extract_single_zip(zip_path, extract_dir, depth=0, state=state)
+        files = _extract_single_zip(zip_path, extract_dir, depth=0, state=state, on_file=on_file)
     except zipfile.BadZipFile as e:
         # Cleanup parziale e propaga
         try:

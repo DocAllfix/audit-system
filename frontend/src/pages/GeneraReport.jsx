@@ -9,6 +9,7 @@ import { useSSEProcess } from '@/hooks/useSSEProcess';
 import {
   FileArchive, Rocket, Download, ArrowRight, CheckCircle2,
   AlertTriangle, BarChart3, FolderOpen, Loader2, Files, Building2,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -87,6 +88,7 @@ export default function GeneraReport() {
   const [companyName, setCompanyName]     = useState('');
   const [editingName, setEditingName]     = useState(false);
   const [nameConfirmed, setNameConfirmed] = useState(false);
+  const [showUnprocessed, setShowUnprocessed] = useState(false);
 
   const queryClient  = useQueryClient();
   const { startSession, setTab1Status, setCompanyName: storeSetCompanyName, addNotification } = useWorkflowStore();
@@ -380,18 +382,74 @@ export default function GeneraReport() {
                       <BarChart3 className="w-3.5 h-3.5 text-primary" /> Riepilogo Run Narrativa
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-0">
-                    {[
-                      { label: 'File nello ZIP',    value: stats.total_files_in_zip ?? 0 },
-                      { label: 'Con testo',         value: stats.documents_with_text ?? 0 },
-                      { label: 'Batch fallback',    value: stats.n_fallback_batches ?? 0 },
-                      { label: 'Non elaborati',     value: stats.n_unprocessed_files ?? 0 },
-                    ].map(s => (
-                      <div key={s.label} className="text-center">
-                        <p className={`text-lg font-bold ${(s.label === 'Batch fallback' || s.label === 'Non elaborati') && s.value > 0 ? 'text-amber-500' : ''}`}>{s.value}</p>
-                        <p className="text-xs text-muted-foreground">{s.label}</p>
+                  <CardContent className="pt-0 space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[
+                        { label: 'File nello ZIP', value: stats.total_files_in_zip ?? 0 },
+                        { label: 'Con testo',      value: stats.documents_with_text ?? 0 },
+                        { label: 'Batch fallback', value: stats.n_fallback_batches ?? 0 },
+                      ].map(s => (
+                        <div key={s.label} className="text-center">
+                          <p className={`text-lg font-bold ${s.label === 'Batch fallback' && s.value > 0 ? 'text-amber-500' : ''}`}>{s.value}</p>
+                          <p className="text-xs text-muted-foreground">{s.label}</p>
+                        </div>
+                      ))}
+                      {/* Non elaborati — cliccabile se > 0 */}
+                      {(() => {
+                        const n = stats.n_unprocessed_files ?? 0;
+                        const list = stats.unprocessed_files ?? [];
+                        return (
+                          <div className="text-center">
+                            {n > 0 ? (
+                              <button
+                                onClick={() => setShowUnprocessed(v => !v)}
+                                className="w-full flex flex-col items-center gap-0.5 group"
+                              >
+                                <span className="text-lg font-bold text-amber-500 flex items-center gap-1">
+                                  {n}
+                                  {showUnprocessed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                </span>
+                                <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+                                  Non elaborati
+                                </span>
+                              </button>
+                            ) : (
+                              <div>
+                                <p className="text-lg font-bold">0</p>
+                                <p className="text-xs text-muted-foreground">Non elaborati</p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {/* Lista file non elaborati espandibile */}
+                    {showUnprocessed && (stats.unprocessed_files ?? []).length > 0 && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-1.5">
+                        <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          File non elaborati — verificali nella tua cartella
+                        </p>
+                        <ul className="space-y-1">
+                          {(stats.unprocessed_files ?? []).map((f, i) => {
+                            const filename = typeof f === 'string' ? f : (f.filename ?? f);
+                            const reason   = typeof f === 'object' ? (f.reason ?? '') : '';
+                            const phase    = typeof f === 'object' ? (f.phase ?? '') : '';
+                            return (
+                              <li key={i} className="flex items-start gap-2 text-xs">
+                                <span className="mt-0.5 shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400" />
+                                <span>
+                                  <span className="font-mono font-medium text-foreground">{filename}</span>
+                                  {reason && (
+                                    <span className="text-muted-foreground ml-1.5">— {reason}</span>
+                                  )}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
                       </div>
-                    ))}
+                    )}
                   </CardContent>
                 </Card>
               </>

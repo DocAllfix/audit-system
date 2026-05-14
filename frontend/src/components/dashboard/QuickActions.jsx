@@ -6,19 +6,19 @@ import { Card, CardContent } from '@/components/ui/card';
 
 const actions = [
   {
-    path: '/genera-report',
+    path: '/workflow/report',
     icon: FileText,
     title: 'Genera Report',
     description: 'Elabora documenti ZIP in report strutturato',
   },
   {
-    path: '/produci-checklist',
+    path: '/workflow/produce',
     icon: ListChecks,
     title: 'Produci JSON',
     description: 'Converti report in checklist clausole ISO',
   },
   {
-    path: '/compila-checklist',
+    path: '/workflow/compile',
     icon: ClipboardCheck,
     title: 'Compila Checklist',
     description: 'Genera documento Word/Excel da template',

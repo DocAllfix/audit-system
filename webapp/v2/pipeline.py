@@ -19,6 +19,7 @@ Caratteristiche:
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -365,7 +366,24 @@ def process_zip_v2(
     files: List[Dict[str, Any]] = []
     try:
         emitter.emit_phase_start(PipelinePhase.INGESTION)
-        files, extract_dir = extract_zip_bytes(zip_bytes, session_id)
+
+        # Callback per emettere il nome di ogni file estratto in tempo reale.
+        # pct sale da 0.05 a 0.90 con una curva logaritmica (i primi file
+        # avanzano veloce, poi si satura) così la barra si muove fin dal primo file.
+        import math as _math
+        def _zip_on_file(fname, count):
+            try:
+                # log(count+1)/log(201) ≈ 0→1 per count 0→200; clampiamo a 0.90
+                estimated_pct = min(0.90, _math.log(count + 1) / _math.log(201))
+                emitter.emit_phase_tick(
+                    PipelinePhase.INGESTION,
+                    pct=estimated_pct,
+                    detail={"current_file": fname[:60], "extracted": count},
+                )
+            except Exception:
+                pass
+
+        files, extract_dir = extract_zip_bytes(zip_bytes, session_id, on_file=_zip_on_file)
         ext_summary = extract_summary(files)
         emitter.emit_phase_end(
             PipelinePhase.INGESTION,
@@ -550,8 +568,36 @@ def process_zip_v2(
         phase_start = time.monotonic()
         emitter.emit_phase_start(PipelinePhase.OCR, total_items=len(needs_ocr_files))
         try:
-            # FIX 10: callback granulare → emit_phase_tick per ogni file OCR
+            # Heartbeat timer: emette tick simulati ogni 3s finché OCR non
+            # produce completamenti reali — evita freeze del frontend a 0%
+            # durante la lunga fase di upload+analisi Azure DI.
+            _ocr_completed_ref = [0]
+            _ocr_stop_timer = threading.Event()
+
+            def _ocr_heartbeat_timer():
+                import time as _time
+                _elapsed = 0
+                while not _ocr_stop_timer.wait(timeout=3.0):
+                    _elapsed += 3
+                    if _ocr_completed_ref[0] == 0:
+                        # Nessun completamento ancora: simula avanzamento lento
+                        # (max 25% stimato, per non "mentire" troppo)
+                        est_pct = min(0.25, _elapsed / (len(needs_ocr_files) * 4.0))
+                        try:
+                            emitter.emit_phase_tick(
+                                PipelinePhase.OCR,
+                                pct=est_pct,
+                                detail={"engine": ocr_engine, "waiting": True},
+                            )
+                        except Exception:
+                            pass
+
+            _hb_thread = threading.Thread(target=_ocr_heartbeat_timer, daemon=True)
+            _hb_thread.start()
+
+            # Callback granulare → emit_phase_tick per ogni file OCR completato
             def _ocr_progress(completed, total, current_file):
+                _ocr_completed_ref[0] = completed
                 try:
                     pct = completed / max(total, 1)
                     emitter.emit_phase_tick(
@@ -575,6 +621,7 @@ def process_zip_v2(
                 meter_session_id=session_id,
                 on_progress=_ocr_progress,
             )
+            _ocr_stop_timer.set()  # ferma heartbeat timer OCR
             # Aggiorna i file con il testo estratto
             ocr_text_by_filename = {
                 r.filename: r.text for r in ocr_results if r.success
@@ -850,6 +897,7 @@ def process_zip_v2(
         if output_mode_narrative:
             from v2.narrative_client_v2 import (
                 analyze_batch_narrative,
+                analyze_batch_narrative_gemini,
                 _load_narrative_prompt,
             )
             _narrative_prompt = _load_narrative_prompt()
@@ -878,12 +926,34 @@ def process_zip_v2(
                 print(f"[V2 PIPELINE] Fallback batch {idx} sollevato: {e}")
                 return None
 
+        _force_fallback = os.environ.get("V2_FORCE_NARRATIVE_FALLBACK", "").strip() == "1"
+
         def _analyze_one(idx: int, batch_docs: List[Dict[str, Any]],
                           compact: bool, model_override: Optional[str]):
             # ── PATH NARRATIVO Azure ────────────────────────────────────────
             if output_mode_narrative:
                 para_start = _batch_para_starts[idx]
                 verb_idx = idx  # ciclo verbi per batch
+
+                # Forza fallback Gemini senza chiamare Azure (solo per test)
+                if _force_fallback and fallback_dispatch is not None:
+                    print(f"[V2 PIPELINE] FORCE_FALLBACK batch {idx} → Gemini narrativo")
+                    try:
+                        fb_paras, _ = analyze_batch_narrative_gemini(
+                            gemini_client=fallback_dispatch.client,
+                            batch_docs=batch_docs,
+                            batch_idx=idx,
+                            total_docs=len(documents),
+                            para_start=para_start,
+                            verb_idx=verb_idx,
+                            narrative_prompt=_narrative_prompt,
+                            meter_session_id=session_id,
+                        )
+                        return idx, fb_paras, True, True
+                    except Exception as fb_e:
+                        print(f"[V2 PIPELINE] FORCE_FALLBACK batch {idx} Gemini fallito: {fb_e}")
+                        return idx, None, False, True
+
                 try:
                     paras, _fb = analyze_batch_narrative(
                         client=primary_dispatch.client,
@@ -899,23 +969,33 @@ def process_zip_v2(
                 except AzureRateLimitExhausted as e:
                     print(
                         f"[V2 PIPELINE] Narrative batch {idx} Azure 429 esaurito "
-                        f"({e.n_retries} retry) → fallback Gemini YAML"
+                        f"({e.n_retries} retry) → fallback Gemini NARRATIVE"
                     )
                     if fallback_dispatch is None:
                         print(f"[V2 PIPELINE] Fallback non disponibile, batch {idx} perso")
                         return idx, None, False, True
-                    fb = _try_fallback(batch_docs, idx, compact)
-                    if fb is None or not (fb.text and not fb.error):
+                    # Chiama Gemini con lo stesso prompt narrativo (non YAML)
+                    try:
+                        fb_paras, _ = analyze_batch_narrative_gemini(
+                            gemini_client=fallback_dispatch.client,
+                            batch_docs=batch_docs,
+                            batch_idx=idx,
+                            total_docs=len(documents),
+                            para_start=para_start,
+                            verb_idx=verb_idx,
+                            narrative_prompt=_narrative_prompt,
+                            meter_session_id=session_id,
+                        )
+                        print(
+                            f"[V2 PIPELINE] Narrative fallback Gemini batch {idx}: "
+                            f"{len(fb_paras)} paragrafi"
+                        )
+                        return idx, fb_paras, True, True
+                    except Exception as fb_e:
+                        print(
+                            f"[V2 PIPELINE] Narrative fallback Gemini batch {idx} fallito: {fb_e}"
+                        )
                         return idx, None, False, True
-                    # Fallback Gemini retorna YAML — wrapper minimo in paragrafo
-                    para_fb = {
-                        "numero": para_start,
-                        "categoria": "ALTRO",
-                        "sottotitolo": f"Batch {idx} — Gemini fallback",
-                        "ente_auditato": "",
-                        "contenuto": fb.text[:4000],
-                    }
-                    return idx, [para_fb], True, True
 
             # ── PATH YAML (Gemini + Azure YAML) ────────────────────────────
             # Trigger 1: rate limit Azure 429 cumulativi → fallback obbligatorio
@@ -1077,22 +1157,56 @@ def process_zip_v2(
         final_filename = f"Audit_V2_NAR_{safe_company}_{timestamp}.docx"
         final_path = output_dir / f"{session_id}_final.docx"
 
+        import re as _re_docx
+        import traceback as _tb_docx
+
+        def _sanitize_para(p: dict) -> dict:
+            """Copia il paragrafo rimuovendo ogni char XML-illegale da tutti i campi stringa."""
+            def _s(v):
+                if isinstance(v, str):
+                    return _re_docx.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", v)
+                return v
+            return {k: _s(v) for k, v in p.items()}
+
+        stats_for_word = {
+            "total_paragraphs": len(all_paragraphs),
+            "docs_estratti": docs_estratti,
+            "docs_vuoti": docs_vuoti,
+        }
+        clean_company = _re_docx.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", company_name)
+        clean_paragraphs = [_sanitize_para(p) for p in all_paragraphs]
+
         try:
-            stats_for_word = {
-                "total_paragraphs": len(all_paragraphs),
-                "docs_estratti": docs_estratti,
-                "docs_vuoti": docs_vuoti,
-            }
             docx_bytes = generate_report_word(
-                paragraphs=all_paragraphs,
+                paragraphs=clean_paragraphs,
                 stats=stats_for_word,
-                company_name=company_name,
+                company_name=clean_company,
             )
             final_path.write_bytes(docx_bytes)
         except Exception as e:
-            emitter.emit_error(ErrorKind.UNKNOWN, f"narrative_docx_build: {e}")
-            cleanup_extraction(extract_dir)
-            return {"success": False, "error": f"narrative_docx_build: {e}"}
+            print(f"[V2 PIPELINE] narrative_docx_build TRACEBACK:\n{_tb_docx.format_exc()}")
+            # Fallback: docx minimale con solo i testi grezzi concatenati
+            try:
+                from docx import Document as _Doc
+                from io import BytesIO as _BytesIO
+                _fb_doc = _Doc()
+                _fb_doc.add_heading(f"AUDIT - {clean_company} (output parziale)", 0)
+                _fb_doc.add_paragraph(
+                    f"ATTENZIONE: la generazione normale ha restituito un errore ({e}). "
+                    "Di seguito il testo grezzo dei paragrafi analizzati."
+                )
+                for p in clean_paragraphs:
+                    _fb_doc.add_heading(str(p.get("sottotitolo", ""))[:200], 2)
+                    _fb_doc.add_paragraph(str(p.get("contenuto", ""))[:5000])
+                _buf = _BytesIO()
+                _fb_doc.save(_buf)
+                final_path.write_bytes(_buf.getvalue())
+                emitter.emit_error(ErrorKind.UNKNOWN, f"narrative_docx_build (fallback usato): {e}")
+            except Exception as e2:
+                print(f"[V2 PIPELINE] narrative_docx_build FALLBACK FAILED:\n{_tb_docx.format_exc()}")
+                emitter.emit_error(ErrorKind.UNKNOWN, f"narrative_docx_build: {e}")
+                cleanup_extraction(extract_dir)
+                return {"success": False, "error": f"narrative_docx_build: {e}"}
 
         emitter.emit_phase_end(
             PipelinePhase.DOCX_BUILD,
@@ -1128,6 +1242,7 @@ def process_zip_v2(
             "n_fallback_batches": n_fallback_batches,
             "fallback_batch_idxs": fallback_batch_idxs,
             "n_unprocessed_files": len(unprocessed_files),
+            "unprocessed_files": unprocessed_files,
             "output_mode": "narrative",
             "n_paragraphs": len(all_paragraphs),
         }
@@ -1246,6 +1361,7 @@ def process_zip_v2(
         "n_fallback_batches": n_fallback_batches,
         "fallback_batch_idxs": fallback_batch_idxs,
         "n_unprocessed_files": len(unprocessed_files),
+        "unprocessed_files": unprocessed_files,
     }
 
     emitter.emit_done(

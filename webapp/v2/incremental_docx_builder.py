@@ -140,15 +140,23 @@ def _slugify(name: str) -> str:
     return slug[:60] or "section"
 
 
+def _strip_xml_illegal(s: str) -> str:
+    """Rimuove caratteri vietati nell'XML 1.0 (null bytes, control chars)."""
+    # XML 1.0 ammette: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff￾￿]", "", s)
+
+
 def _safe_str(v) -> str:
-    """Converte qualsiasi valore in stringa leggibile capped."""
+    """Converte qualsiasi valore in stringa leggibile capped, senza char XML-illegali."""
     if v is None:
         return "n.d."
     if isinstance(v, (list, tuple)):
-        return " | ".join(str(x) for x in v) if v else "n.d."
-    if isinstance(v, dict):
-        return " | ".join(f"{k}: {vv}" for k, vv in v.items()) if v else "n.d."
-    s = str(v).strip()
+        s = " | ".join(str(x) for x in v) if v else "n.d."
+    elif isinstance(v, dict):
+        s = " | ".join(f"{k}: {vv}" for k, vv in v.items()) if v else "n.d."
+    else:
+        s = str(v).strip()
+    s = _strip_xml_illegal(s)
     return (s[:MAX_CELL_CHARS] + "…") if len(s) > MAX_CELL_CHARS else (s or "n.d.")
 
 
@@ -482,7 +490,7 @@ def _render_doc_card(doc_obj, doc_entry: Dict[str, Any]) -> None:
     }
     cat_sec = doc_entry.get("categorie_secondarie") or []
     if cat_sec:
-        header_fields["Categorie secondarie"] = " | ".join(str(c) for c in cat_sec)
+        header_fields["Categorie secondarie"] = _strip_xml_illegal(" | ".join(str(c) for c in cat_sec))
     _dict_to_table(doc_obj, header_fields)
     doc_obj.add_paragraph()
 
