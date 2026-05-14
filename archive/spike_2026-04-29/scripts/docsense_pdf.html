@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>DocSense — Documentazione Tecnica di Sistema</title>
+<style>
+  @page { size: A4; margin: 18mm 14mm 18mm 28mm; }
+  @page :first { margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+    color: #1a1a1a;
+    font-size: 10pt;
+    line-height: 1.55;
+    background: #ffffff;
+  }
+
+  /* SIDEBAR LEFT (only via @page background trick is not reliable; use fixed element) */
+  .sidebar-fixed {
+    position: fixed;
+    left: 0; top: 0;
+    width: 14mm;
+    height: 100vh;
+    background: #5D7B5D;
+    z-index: 1;
+  }
+
+  /* COVER PAGE — full bleed, no @page margin */
+  .cover {
+    position: relative;
+    width: 210mm;
+    height: 297mm;
+    padding: 30mm 24mm 24mm 42mm;
+    page-break-after: always;
+    overflow: hidden;
+    background: #ffffff;
+  }
+  .cover::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0;
+    width: 14mm; height: 297mm;
+    background: #5D7B5D;
+  }
+  .cover-logo-area {
+    display: flex; gap: 18mm;
+    margin-bottom: 36mm;
+  }
+  .axialoop-logo {
+    display: flex; flex-direction: column; gap: 4mm;
+  }
+  .axialoop-logo .mark {
+    width: 22mm; height: 22mm;
+    border-radius: 3.5mm;
+    background: #f3f3ee;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Helvetica", sans-serif;
+    color: #2a2a2a;
+    font-size: 8pt;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+  .axialoop-logo .caption {
+    font-size: 7.5pt;
+    color: #888;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    text-align: center;
+    width: 22mm;
+  }
+  .cover-eyebrow {
+    display: flex; align-items: center; gap: 6mm;
+    color: #5D7B5D;
+    font-size: 8.5pt;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-top: 10mm;
+  }
+  .cover-eyebrow .bar {
+    display: inline-block;
+    width: 18mm; height: 1.5px;
+    background: #5D7B5D;
+  }
+  .cover-title {
+    font-size: 64pt;
+    font-weight: 900;
+    line-height: 0.95;
+    color: #0d0d0d;
+    margin: 5mm 0 7mm 0;
+    letter-spacing: -2.5px;
+  }
+  .cover-subtitle {
+    font-size: 14pt;
+    color: #5D7B5D;
+    font-weight: 600;
+    margin-bottom: 10mm;
+  }
+  .cover-intro {
+    border-left: 3px solid #5D7B5D;
+    padding-left: 6mm;
+    color: #444;
+    font-size: 10pt;
+    line-height: 1.65;
+    max-width: 130mm;
+    margin-bottom: 16mm;
+  }
+  .cover-meta { border-top: 1px solid #d8d8d8; }
+  .cover-meta-row {
+    display: flex;
+    border-bottom: 1px solid #ececec;
+    padding: 3.5mm 0;
+    font-size: 9.5pt;
+  }
+  .cover-meta-key {
+    flex: 0 0 50mm;
+    color: #777;
+    font-size: 8pt;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .cover-meta-val { color: #1a1a1a; }
+  .cover-footer {
+    position: absolute;
+    bottom: 14mm;
+    left: 42mm;
+    right: 24mm;
+    display: flex; justify-content: space-between;
+    font-size: 8pt;
+    color: #888;
+    border-top: 1px solid #e0e0e0;
+    padding-top: 4mm;
+  }
+
+  /* CONTENT PAGES — use real @page with margins, sidebar via fixed */
+  .pg-header {
+    display: flex; justify-content: space-between;
+    font-size: 8pt; color: #888;
+    margin-bottom: 8mm;
+    padding-bottom: 0;
+  }
+  h1.section {
+    display: flex; align-items: baseline; gap: 8mm;
+    border-bottom: 2px solid #d8e0d4;
+    padding-bottom: 4mm;
+    margin: 0 0 7mm 0;
+    font-size: 19pt; font-weight: 800; color: #0d0d0d;
+    letter-spacing: -0.5px;
+    page-break-after: avoid;
+  }
+  h1.section .sect-num {
+    background: #E8EDE5;
+    color: #5D7B5D;
+    padding: 1.5mm 3.5mm;
+    font-size: 9.5pt; border-radius: 1.5mm;
+    font-weight: 700; letter-spacing: 1px;
+  }
+  h1.plain {
+    font-size: 19pt; font-weight: 800; color: #0d0d0d;
+    border-bottom: 2px solid #d8e0d4;
+    padding-bottom: 4mm; margin: 0 0 7mm 0;
+    letter-spacing: -0.5px;
+    page-break-after: avoid;
+  }
+  h2.subsection {
+    display: flex; align-items: center; gap: 3mm;
+    color: #1a1a1a;
+    font-size: 11.5pt; font-weight: 700;
+    margin: 7mm 0 3mm 0;
+    page-break-after: avoid;
+  }
+  h2.subsection::before {
+    content: ""; display: inline-block;
+    width: 2.5mm; height: 4.5mm;
+    background: #5D7B5D; border-radius: 0.5mm;
+  }
+  p { margin: 2mm 0 3mm 0; }
+  ul, ol { margin: 2mm 0 4mm 6mm; padding-left: 2mm; }
+  li { margin: 1mm 0; }
+  code {
+    background: #E8EDE5;
+    color: #2a4d2a;
+    padding: 0.3mm 1.5mm;
+    border-radius: 1mm;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 8.8pt;
+  }
+  pre.codeblock {
+    background: #1F2D24;
+    color: #d8e6da;
+    padding: 4mm 5mm;
+    border-radius: 1.5mm;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 8.5pt;
+    line-height: 1.45;
+    margin: 3mm 0 4mm 0;
+    white-space: pre;
+    overflow: hidden;
+    page-break-inside: avoid;
+  }
+  pre.codeblock .com { color: #8aa48f; }
+  pre.codeblock .key { color: #c8e6b6; font-weight: 600; }
+
+  table.t {
+    width: 100%; border-collapse: collapse;
+    margin: 3mm 0 4mm 0; font-size: 9pt;
+    page-break-inside: auto;
+  }
+  table.t thead th {
+    background: #5D7B5D; color: #ffffff;
+    text-align: left; padding: 2.5mm 3.5mm;
+    font-size: 8pt; letter-spacing: 1.5px;
+    text-transform: uppercase; font-weight: 700;
+  }
+  table.t tbody td {
+    padding: 2.5mm 3.5mm;
+    border-bottom: 1px solid #ececec;
+    vertical-align: top;
+  }
+  table.t tbody tr:nth-child(even) { background: #fafafa; }
+  table.t tbody tr { page-break-inside: avoid; }
+
+  .callout {
+    background: #E8EDE5;
+    border-left: 3px solid #5D7B5D;
+    padding: 3.5mm 4.5mm;
+    margin: 3mm 0 4mm 0;
+    border-radius: 0 1.5mm 1.5mm 0;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  .callout .title {
+    font-size: 7.5pt; letter-spacing: 2px;
+    text-transform: uppercase; color: #5D7B5D;
+    font-weight: 700; margin-bottom: 1.5mm;
+  }
+
+  .metrics { display: flex; gap: 4mm; margin: 4mm 0; page-break-inside: avoid; }
+  .metric {
+    flex: 1; border: 1px solid #d8d8d8;
+    border-top: 3px solid #5D7B5D;
+    padding: 3.5mm 4.5mm; border-radius: 1.5mm;
+  }
+  .metric .k {
+    color: #777; font-size: 7.5pt; letter-spacing: 2px;
+    text-transform: uppercase; font-weight: 700; margin-bottom: 1mm;
+  }
+  .metric .v {
+    font-size: 26pt; font-weight: 900; color: #0d0d0d;
+    line-height: 1; letter-spacing: -1.5px; margin-bottom: 1mm;
+  }
+  .metric .sub { font-size: 8pt; color: #666; }
+
+  table.index {
+    width: 100%; border-collapse: collapse;
+    margin-top: 4mm; font-size: 10pt;
+  }
+  table.index thead th {
+    color: #777; text-align: left;
+    padding: 2mm 3mm;
+    font-size: 7.5pt; letter-spacing: 1.5px;
+    text-transform: uppercase; font-weight: 700;
+    border-bottom: 1.5px solid #5D7B5D;
+  }
+  table.index thead th.r { text-align: right; }
+  table.index tbody td {
+    padding: 2.2mm 3mm;
+    border-bottom: 1px dotted #d8d8d8;
+  }
+  table.index tbody td.num {
+    color: #5D7B5D; font-weight: 700; width: 12mm;
+  }
+  table.index tbody td.pageno {
+    text-align: right; color: #5D7B5D;
+    font-weight: 700; width: 16mm;
+  }
+
+  .layer {
+    border-left: 3px solid #5D7B5D;
+    background: #f6f9f4;
+    padding: 3mm 4.5mm;
+    margin: 2.5mm 0;
+    border-radius: 0 1.5mm 1.5mm 0;
+    page-break-inside: avoid;
+  }
+  .layer .lab {
+    display: inline-block;
+    background: #5D7B5D; color: white;
+    padding: 0.5mm 2mm;
+    font-size: 7.5pt; letter-spacing: 1px;
+    font-weight: 700; border-radius: 1mm;
+    margin-right: 3mm; vertical-align: middle;
+  }
+  .layer .lab-title {
+    font-weight: 700; color: #1a1a1a;
+    font-size: 9pt; text-transform: uppercase;
+    letter-spacing: 1.2px;
+  }
+  .layer p { margin: 1.5mm 0 0 0; font-size: 9pt; color: #333; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 2mm; margin: 3mm 0 4mm 0; }
+  .chip {
+    background: #E8EDE5; color: #2a4d2a;
+    padding: 1.5mm 3mm;
+    border-radius: 1.5mm;
+    font-size: 9pt; font-weight: 600;
+    border: 1px solid #d0dcc7;
+  }
+
+  .footer-note {
+    margin-top: 5mm;
+    font-style: italic;
+    color: #777;
+    font-size: 8.5pt;
+    border-top: 1px solid #e0e0e0;
+    padding-top: 3mm;
+  }
+  .pg-section-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- =================== COVER (full-bleed, separate page) =================== -->
+<div class="cover">
+  <div class="cover-logo-area">
+    <div class="axialoop-logo">
+      <div class="mark">axialoop</div>
+      <div class="caption">Sviluppatore</div>
+    </div>
+  </div>
+
+  <div class="cover-eyebrow">
+    <span class="bar"></span>
+    <span>Documentazione Tecnica di Sistema</span>
+  </div>
+
+  <h1 class="cover-title">DocSense</h1>
+  <div class="cover-subtitle">Architettura · Sicurezza · Pipeline di Elaborazione</div>
+
+  <div class="cover-intro">
+    Questo documento descrive l'architettura tecnica, il modello di elaborazione, i meccanismi
+    di sicurezza e la conformità GDPR del sistema DocSense così come è stato progettato e
+    realizzato. È destinato a chi necessita di una comprensione tecnica precisa del sistema e
+    della sua applicabilità a contesti di analisi documentale, compliance, reporting strutturato
+    e gestione di flussi documentali professionali.
+  </div>
+
+  <div class="cover-meta">
+    <div class="cover-meta-row"><div class="cover-meta-key">Prodotto</div><div class="cover-meta-val">DocSense — Motore di analisi e sintesi documentale automatizzata</div></div>
+    <div class="cover-meta-row"><div class="cover-meta-key">Versione documento</div><div class="cover-meta-val">1.0 — Maggio 2026</div></div>
+    <div class="cover-meta-row"><div class="cover-meta-key">Sviluppatore</div><div class="cover-meta-val">Axialoop di Di Lonardo Alessandro</div></div>
+    <div class="cover-meta-row"><div class="cover-meta-key">Domini applicativi</div><div class="cover-meta-val">Analisi documentale · Compliance · Reporting strutturato · Due diligence</div></div>
+    <div class="cover-meta-row"><div class="cover-meta-key">Framework supportati</div><div class="cover-meta-val">10 standard normativi pre-configurati (vedi § 09)</div></div>
+    <div class="cover-meta-row"><div class="cover-meta-key">Classificazione</div><div class="cover-meta-val">Riservato — Solo uso interno</div></div>
+  </div>
+
+  <div class="cover-footer">
+    <span>axialoop.io</span>
+    <span>Confidenziale · Non distribuire</span>
+  </div>
+</div>
+
+<!-- =================== INTRO + INDICE =================== -->
+<div>
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>Maggio 2026</span>
+  </div>
+
+  <h1 class="plain">Introduzione</h1>
+
+  <p>DocSense è un motore di elaborazione documentale automatizzata. Riceve in input un pacchetto
+  arbitrario di documenti — visure, contratti, procedure, manuali, dichiarazioni, certificazioni,
+  documenti tecnici, atti societari, documentazione di sicurezza, documenti ambientali — e
+  produce in pochi minuti una <strong>relazione narrativa strutturata</strong> che organizza,
+  sintetizza ed espone le evidenze oggettive emerse dalla lettura sistematica dell'intero
+  pacchetto.</p>
+
+  <p>Il sistema si rivolge a professionisti e organizzazioni che, nella propria attività
+  quotidiana, devono esaminare grandi volumi di documenti eterogenei e produrre sintesi
+  strutturate, tracciabili e ripetibili. Trova applicazione naturale in tutti i contesti in cui
+  l'analisi documentale costituisce una fase critica del processo: gestione documentale aziendale,
+  compliance normativa, reporting strutturato, due diligence, gap analysis, verifica documentale
+  preliminare, screening di fornitori e partner.</p>
+
+  <h2 class="subsection">Scopo di Questo Documento</h2>
+  <p>Questo documento descrive l'architettura tecnica, i meccanismi di sicurezza e i flussi
+  operativi del sistema così come è stato progettato e realizzato. È destinato a chi necessita
+  di una comprensione tecnica precisa del sistema: come è strutturata la pipeline, come viene
+  garantita la sicurezza e l'isolamento dei dati, come funziona la conformità GDPR, su quale
+  infrastruttura il sistema opera, e come può essere adattato a verticali specifici.</p>
+  <p>Non è un manuale utente né una guida operativa. È una documentazione tecnica di riferimento
+  sull'implementazione, pensata anche come base per la valutazione di compliance e privacy da
+  parte di clienti, partner e responsabili della protezione dei dati.</p>
+
+  <h2 class="subsection">Stato di Maturità</h2>
+  <p>DocSense è un sistema in produzione, già testato operativamente in collaborazione con uno
+  studio ingegneristico che opera nel settore dell'accompagnamento delle aziende manifatturiere
+  e degli stabilimenti produttivi nei processi di certificazione, di adeguamento normativo e di
+  conformità ambientale. Nel corso della fase di validazione operativa, il motore ha elaborato
+  <strong>oltre 15.000 documenti</strong> appartenenti a tipologie eterogenee — visure camerali,
+  DVR, procedure di gestione, manuali qualità, dichiarazioni di conformità, certificazioni di
+  prodotto e di processo, contratti, verbali, evidenze fotografiche — confermando robustezza,
+  accuratezza e velocità di elaborazione anche su volumi documentali estesi.</p>
+
+  <h1 class="plain" style="margin-top: 12mm;">Indice</h1>
+
+  <table class="index">
+    <thead>
+      <tr><th>§</th><th>Sezione</th><th class="r">Pag.</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="num">01</td><td>Introduzione</td><td class="pageno">2</td></tr>
+      <tr><td class="num">02</td><td>Stack Tecnologico &amp; Architettura Logica</td><td class="pageno">4</td></tr>
+      <tr><td class="num">03</td><td>La Pipeline di Elaborazione</td><td class="pageno">6</td></tr>
+      <tr><td class="num">04</td><td>Motore OCR: Azure Document Intelligence</td><td class="pageno">8</td></tr>
+      <tr><td class="num">05</td><td>Motore di Sintesi: Azure OpenAI GPT-4.1-mini</td><td class="pageno">9</td></tr>
+      <tr><td class="num">06</td><td>Sicurezza: Architettura a Difesa Stratificata</td><td class="pageno">11</td></tr>
+      <tr><td class="num">07</td><td>GDPR Compliance: Mappatura Articolo per Articolo</td><td class="pageno">14</td></tr>
+      <tr><td class="num">08</td><td>Modello di Deploy: Tenant Dedicato</td><td class="pageno">16</td></tr>
+      <tr><td class="num">09</td><td>Framework Pre-Configurati &amp; Verticali Applicativi</td><td class="pageno">17</td></tr>
+      <tr><td class="num">10</td><td>Continuità Operativa e Backup</td><td class="pageno">19</td></tr>
+      <tr><td class="num">11</td><td>Monitoraggio e Osservabilità</td><td class="pageno">20</td></tr>
+      <tr><td class="num">12</td><td>Roadmap di Evoluzione</td><td class="pageno">21</td></tr>
+      <tr><td class="num">13</td><td>Glossario Tecnico</td><td class="pageno">22</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- =================== § 02 STACK =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 02 — Architettura del Sistema</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 02</span> Il Cuore Tecnologico: Architettura del Sistema</h1>
+
+  <h2 class="subsection">Stack Tecnologico</h2>
+  <p>DocSense è costruito su tecnologie enterprise-grade selezionate per affidabilità, scalabilità
+  e conformità europea ai requisiti di trattamento dei dati personali:</p>
+
+  <table class="t">
+    <thead><tr><th>Layer</th><th>Tecnologia</th><th>Ruolo</th></tr></thead>
+    <tbody>
+      <tr><td>Frontend</td><td>React 18 + Vite</td><td>UI reattiva, single-page application</td></tr>
+      <tr><td>Backend API</td><td>FastAPI (Python 3.11)</td><td>REST API, autenticazione, orchestrazione pipeline</td></tr>
+      <tr><td>Application Server</td><td>uvicorn (worker pool)</td><td>ASGI server multi-worker per parallelismo</td></tr>
+      <tr><td>Reverse Proxy</td><td>nginx</td><td>TLS termination, security headers, rate limiting</td></tr>
+      <tr><td>Database</td><td>SQLite 3</td><td>Audit log, anagrafica utenti, metadati pratiche</td></tr>
+      <tr><td>OCR Engine</td><td>Azure Document Intelligence</td><td>Riconoscimento testo da PDF e immagini</td></tr>
+      <tr><td>LLM Engine</td><td>Azure OpenAI GPT-4.1-mini</td><td>Sintesi narrativa, classificazione, analisi semantica</td></tr>
+      <tr><td>Document builder</td><td>python-docx</td><td>Generazione report Word strutturato</td></tr>
+      <tr><td>Auth</td><td>JWT (HS256) + bcrypt</td><td>Sessioni stateless, hashing password</td></tr>
+      <tr><td>TLS</td><td>Let's Encrypt</td><td>Certificati X.509 con auto-renew</td></tr>
+      <tr><td>Hosting</td><td>Hetzner Cloud — Germania (EU)</td><td>Server fisico in territorio europeo</td></tr>
+      <tr><td>CI/CD</td><td>GitHub Actions</td><td>Test + deploy automatico su push</td></tr>
+    </tbody>
+  </table>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="k">Documenti elaborati</div>
+      <div class="v">15k+</div>
+      <div class="sub">Pacchetti documentali eterogenei</div>
+    </div>
+    <div class="metric">
+      <div class="k">Framework pre-configurati</div>
+      <div class="v">10</div>
+      <div class="sub">Standard normativi e di settore</div>
+    </div>
+    <div class="metric">
+      <div class="k">Pipeline a fasi</div>
+      <div class="v">8</div>
+      <div class="sub">Fasi deterministiche orchestrate</div>
+    </div>
+  </div>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 02 — Architettura (continua)</span>
+  </div>
+
+  <h2 class="subsection">Architettura Logica</h2>
+  <p>Il sistema adotta un'architettura <strong>"Pipeline-First, Stateless-Workers"</strong>: ogni
+  richiesta di elaborazione attraversa una sequenza deterministica di fasi indipendenti, eseguite
+  da worker stateless che possono essere scalati orizzontalmente. I dati documentali transitano
+  nel sistema senza essere mai persistiti permanentemente: l'unica memoria duratura è il log di
+  audit e i metadati di pratica.</p>
+
+  <pre class="codeblock"><span class="com">Browser (React SPA)</span>
+    │
+    │ HTTPS + JWT Auth
+    ▼
+nginx reverse proxy
+    ├── TLS termination (Let's Encrypt)
+    ├── Security headers (HSTS, CSP, X-Frame-Options)
+    ├── Rate limiting (100 r/s, burst 200)
+    └── Body limit (1 GB)
+            │
+            ▼
+FastAPI workers (uvicorn)
+    ├── Auth layer (JWT + bcrypt)
+    ├── Pipeline orchestrator (8 phases)
+    └── Audit logger (SQLite)
+            │
+            ├──▶ Azure Document Intelligence  <span class="com">(Sweden Central — EU)</span>
+            └──▶ Azure OpenAI GPT-4.1-mini    <span class="com">(Sweden Central — EU)</span></pre>
+
+  <h2 class="subsection">Separazione delle Responsabilità</h2>
+  <ul>
+    <li><strong>Frontend</strong> — si occupa esclusivamente di presentazione e raccolta input.
+    Non contiene logica di business, non gestisce segreti.</li>
+    <li><strong>nginx</strong> — è l'unico punto di contatto con la rete pubblica. Termina TLS,
+    applica i security headers, fa enforcement del rate limiting.</li>
+    <li><strong>FastAPI workers</strong> — eseguono autenticazione, orchestrazione della pipeline
+    di elaborazione e logging. Sono stateless: ogni richiesta è autocontenuta tramite il JWT.</li>
+    <li><strong>SQLite</strong> — contiene solo metadati operativi: utenti, pratiche elaborate,
+    log di accesso, log di errore. <strong>Non contiene mai il contenuto dei documenti caricati</strong>.</li>
+  </ul>
+
+  <div class="callout">
+    <div class="title">Principio Chiave — No Document Persistence</div>
+    I documenti caricati non vengono mai scritti nel database. Vivono esclusivamente nella
+    memoria del worker durante l'elaborazione e in una directory temporanea sul filesystem
+    cifrato, per la durata strettamente necessaria al processing. Al termine dell'elaborazione
+    vengono rimossi automaticamente.
+  </div>
+
+  <div class="callout">
+    <div class="title">Nota Implementativa — Zero Egress non Europeo</div>
+    Tutti gli endpoint Azure utilizzati (Document Intelligence e OpenAI) sono configurati su
+    region <strong>Sweden Central</strong>. Il sistema non comunica con servizi extra-UE in
+    nessuna fase del processing. Non utilizza CDN americane, non chiama API di provider non
+    europei, non esporta telemetria verso servizi terzi.
+  </div>
+</div>
+
+<!-- =================== § 03 PIPELINE =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 03 — Pipeline di Elaborazione</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 03</span> La Pipeline di Elaborazione</h1>
+
+  <h2 class="subsection">Flusso Deterministico a 8 Fasi</h2>
+  <p>Ogni richiesta di elaborazione attraversa un ciclo di vita strutturato in 8 fasi (PHASE-01
+  → PHASE-08), ciascuna corrispondente a una funzione specifica del processo di analisi. Il
+  progresso complessivo viene calcolato automaticamente come avanzamento ponderato delle singole
+  fasi ed emesso in tempo reale al client tramite Server-Sent Events.</p>
+
+  <table class="t">
+    <thead><tr><th>Fase</th><th>Nome</th><th>Contenuto</th></tr></thead>
+    <tbody>
+      <tr><td><code>PHASE-01</code></td><td>INGESTION</td><td>Decompressione del pacchetto, enumerazione file, classificazione per estensione</td></tr>
+      <tr><td><code>PHASE-02</code></td><td>CLASSIFICATION</td><td>Identificazione tipologia documentale (visura, procedura, manuale, certificazione)</td></tr>
+      <tr><td><code>PHASE-03</code></td><td>OCR</td><td>Riconoscimento testo da scansioni e immagini tramite Azure Document Intelligence</td></tr>
+      <tr><td><code>PHASE-04</code></td><td>NORMALIZATION</td><td>Pulizia testo, deduplicazione, segmentazione in unità semantiche</td></tr>
+      <tr><td><code>PHASE-05</code></td><td>BATCHING</td><td>Raggruppamento documenti in lotti omogenei (max 10 doc / 100k char per batch)</td></tr>
+      <tr><td><code>PHASE-06</code></td><td>ANALYSIS</td><td>Generazione narrativa con LLM, una sintesi per documento (regola 1:1:1)</td></tr>
+      <tr><td><code>PHASE-07</code></td><td>AGGREGATION</td><td>Composizione del report finale, raggruppamento per macroaree tematiche</td></tr>
+      <tr><td><code>PHASE-08</code></td><td>DOCX BUILD</td><td>Generazione del documento Word strutturato con intestazione, indice e paragrafi</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="title">Regola 1:1:1 — Tracciabilità Documentale</div>
+    Ogni documento in input genera <strong>una e una sola</strong> sezione narrativa in output.
+    Nessun documento viene "fuso" con altri, nessun paragrafo viene generato senza una sorgente
+    documentale identificabile. Questa regola garantisce che ogni affermazione presente nel
+    report sia tracciabile al documento di origine, eliminando il rischio di "allucinazione"
+    tipico degli output generativi non vincolati. In contesti professionali questa proprietà è
+    irrinunciabile: ogni evidenza riportata è verificabile sul documento sorgente.
+  </div>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 03 — Pipeline (continua)</span>
+  </div>
+
+  <h2 class="subsection">Streaming Eventi (Server-Sent Events)</h2>
+  <p>L'orchestrator emette eventi strutturati a ogni transizione significativa:</p>
+  <ul>
+    <li><code>session.start</code> — inizio elaborazione, con metadati pacchetto</li>
+    <li><code>phase.start</code> — inizio di una fase</li>
+    <li><code>phase.tick</code> — avanzamento intra-fase (file N di M elaborato)</li>
+    <li><code>phase.end</code> — completamento fase, con metriche (durata, conteggi)</li>
+    <li><code>heartbeat</code> — segnale di liveness ogni 5 secondi (PID worker, memoria RSS)</li>
+    <li><code>done</code> — completamento con stats finali (durata totale, token usati, costo)</li>
+    <li><code>error</code> — errore terminale con tipo, messaggio e contesto</li>
+  </ul>
+
+  <h2 class="subsection">Performance Misurate in Produzione</h2>
+  <p>Le seguenti metriche sono state misurate su elaborazioni reali. Includono l'intero ciclo
+  di vita della richiesta, dal caricamento alla disponibilità del documento Word finale.</p>
+
+  <table class="t">
+    <thead><tr><th>Volume pacchetto</th><th>Documenti</th><th>Tempo end-to-end</th><th>Throughput</th></tr></thead>
+    <tbody>
+      <tr><td>~3 MB</td><td>9–11</td><td>35–45 secondi</td><td>~0.25 doc/sec</td></tr>
+      <tr><td>~25 MB</td><td>50–60</td><td>1m 50s – 2m 10s</td><td>~0.50 doc/sec</td></tr>
+      <tr><td>~90 MB</td><td>160–170</td><td>5m 20s</td><td>~0.51 doc/sec</td></tr>
+      <tr><td>~300 MB</td><td>300–310</td><td>7m 20s</td><td>~0.70 doc/sec</td></tr>
+      <tr><td>~660 MB</td><td>490–500</td><td>11m 30s</td><td>~0.72 doc/sec</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="title">Risultato</div>
+    Il sistema scala in modo sub-lineare rispetto al volume del pacchetto: il throughput
+    documenti/secondo migliora con il crescere della dimensione, grazie al batching parallelo.
+    Un pacchetto di mezzo gigabyte di documenti viene completamente analizzato e sintetizzato in
+    circa 11 minuti, contro le decine di ore necessarie a una lettura manuale equivalente.
+  </div>
+</div>
+
+<!-- =================== § 04 OCR =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 04 — Motore OCR</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 04</span> Motore OCR: Azure Document Intelligence</h1>
+
+  <h2 class="subsection">Scelta Tecnologica</h2>
+  <p>Per il riconoscimento del testo da PDF scansionati e immagini il sistema utilizza
+  <strong>Azure Document Intelligence Read API</strong>, un servizio Microsoft di OCR di livello
+  enterprise basato su modelli proprietari di visione artificiale ottimizzati per documenti
+  aziendali e amministrativi.</p>
+
+  <ul>
+    <li><strong>Accuratezza superiore su documenti italiani strutturati</strong> — visure, atti
+    notarili, certificazioni, moduli amministrativi con layout complessi</li>
+    <li><strong>Region europea con conformità GDPR contrattualizzata</strong> — endpoint Sweden
+    Central, dati non utilizzati per training di modelli</li>
+    <li><strong>Throughput elevato e parallelismo gestito</strong> — il servizio supporta nativamente
+    chiamate concorrenti</li>
+    <li><strong>SLA enterprise</strong> — uptime garantito 99.9%, con compensazioni contrattuali</li>
+  </ul>
+
+  <h2 class="subsection">Configurazione di Esecuzione</h2>
+  <table class="t">
+    <thead><tr><th>Parametro</th><th>Valore</th><th>Significato</th></tr></thead>
+    <tbody>
+      <tr><td><code>OCR_ENGINE</code></td><td><code>azure_di</code></td><td>Selezione esplicita del motore OCR</td></tr>
+      <tr><td><code>AZURE_DI_PARALLEL</code></td><td><code>15</code></td><td>Numero massimo di chiamate OCR concorrenti</td></tr>
+      <tr><td><code>AZURE_DI_REGION</code></td><td><code>swedencentral</code></td><td>Region europea per residenza dati</td></tr>
+      <tr><td>API version</td><td><code>2024-11-30</code></td><td>Modelli OCR più recenti, supporto multilingua</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">Tipologie Documentali Supportate</h2>
+  <ul>
+    <li><strong>PDF nativi</strong> (testo selezionabile) — estrazione diretta, senza OCR</li>
+    <li><strong>PDF scansionati</strong> (immagini) — OCR completo tramite Azure DI</li>
+    <li><strong>PDF misti</strong> (alcune pagine native, altre scansionate) — dispatch automatico</li>
+    <li><strong>Immagini singole</strong> (JPG, PNG, TIFF, HEIC) — OCR diretto</li>
+    <li><strong>Documenti Office</strong> (DOCX, XLSX) — estrazione testo nativa</li>
+    <li><strong>File compressi annidati</strong> (ZIP ricorsivi) — decompressione iterativa</li>
+  </ul>
+
+  <h2 class="subsection">Strategia di Fallback</h2>
+  <p>Nel caso in cui una chiamata OCR fallisca per timeout, rate limit o errore transitorio, il
+  sistema applica una politica di retry con backoff esponenziale (4 tentativi). Se anche il
+  quarto tentativo fallisce, il documento viene marcato come "non processabile" nel report
+  finale, con annotazione esplicita. <strong>Il sistema non inventa contenuti per documenti
+  illeggibili</strong>.</p>
+</div>
+
+<!-- =================== § 05 LLM =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 05 — Motore di Sintesi</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 05</span> Motore di Sintesi: Azure OpenAI GPT-4.1-mini</h1>
+
+  <h2 class="subsection">Modello e Provider</h2>
+  <p>La generazione della relazione narrativa è affidata a <strong>GPT-4.1-mini erogato tramite
+  Azure OpenAI</strong>, in region Sweden Central. Questa scelta combina la qualità del modello
+  con i requisiti contrattuali Azure: nessun utilizzo dei prompt e degli output per training di
+  modelli pubblici, residenza dei dati garantita in EU, log di accesso disponibili per audit.</p>
+
+  <table class="t">
+    <thead><tr><th>Parametro</th><th>Valore</th></tr></thead>
+    <tbody>
+      <tr><td>Provider</td><td>Azure OpenAI Service</td></tr>
+      <tr><td>Modello</td><td>GPT-4.1-mini</td></tr>
+      <tr><td>Region</td><td>Sweden Central (EU)</td></tr>
+      <tr><td>API endpoint type</td><td>v1 (chat completions)</td></tr>
+      <tr><td>Output mode</td><td><code>narrative</code> — testo libero strutturato</td></tr>
+      <tr><td>Token cap per batch</td><td>100.000 caratteri input</td></tr>
+      <tr><td>Max files per batch</td><td>10 documenti</td></tr>
+      <tr><td>Concorrenza</td><td>4 worker paralleli</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">Architettura del Prompt Narrativo</h2>
+  <p>Il prompt sottoposto al modello impone vincoli espliciti su forma, contenuto e tracciabilità:</p>
+
+  <ul>
+    <li><strong>Lunghezza controllata</strong> — ogni paragrafo tra 200 e 800 parole</li>
+    <li><strong>Sottotitolo identificativo obbligatorio</strong> — intestazione numerata + riferimento al documento sorgente</li>
+    <li><strong>Varietà lessicale</strong> — verbo iniziale ruotato deterministicamente (Esaminato, Acquisito, Verificato, Visionato, Consultato, Analizzato, Rilevato, Preso atto di)</li>
+    <li><strong>Privacy by Design nel prompt</strong> — il modello è istruito a non riportare dati personali identificativi non necessari</li>
+    <li><strong>Tono oggettivo</strong> — il modello non esprime giudizi, non formula raccomandazioni, non interpreta. Espone solo evidenze</li>
+  </ul>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 05 — Motore di Sintesi (continua)</span>
+  </div>
+
+  <h2 class="subsection">Garanzia 1:1:1 Documento ↔ Paragrafo ↔ Output</h2>
+  <p>Una caratteristica distintiva di DocSense rispetto a soluzioni generaliste di "AI summary"
+  è la garanzia formale che <strong>ogni documento in input genera esattamente un paragrafo in
+  output</strong>. Non esistono fusioni silenti, non esistono documenti dimenticati, non esistono
+  paragrafi senza sorgente. Questa garanzia è enforced da un controllo post-generazione che:</p>
+
+  <ol>
+    <li>Conta i documenti effettivamente forniti al batch (N)</li>
+    <li>Conta i paragrafi prodotti dal modello (P)</li>
+    <li>Se <code>N ≠ P</code>, il batch viene rifiutato e re-inviato al modello con un prompt di correzione esplicito</li>
+    <li>Solo quando <code>N = P</code> per tutti i batch, il report viene composto</li>
+  </ol>
+
+  <div class="callout">
+    <div class="title">Anti-Allucinazione by Construction</div>
+    Il modello non può "inventare" un documento che non esiste, e non può ignorare un documento
+    che è stato fornito. Se un documento è illeggibile, il paragrafo corrispondente lo dichiara
+    esplicitamente: "documento non processato — testo non riconoscibile". La trasparenza è una
+    proprietà strutturale del sistema, non un valore opzionale. Ogni evidenza riportata è
+    verificabile e difendibile rispetto al documento sorgente.
+  </div>
+
+  <h2 class="subsection">Gestione Rate Limit e Resilienza</h2>
+  <p>Quando il provider risponde con un errore <code>429 Too Many Requests</code>, il sistema
+  attiva una strategia di retry con backoff esponenziale (2s, 4s, 8s, 16s). Il jitter casuale
+  aggiunto a ogni intervallo evita la "thundering herd". Dopo 4 retry falliti è prevista
+  l'attivazione opzionale di un fallback secondario.</p>
+
+  <h2 class="subsection">Token Metering e Trasparenza Operativa</h2>
+  <p>Ogni elaborazione conserva il conteggio esatto dei token di input e output consumati. I dati
+  permettono reportistica precisa per cliente / periodo, identificazione di anomalie (pratiche
+  con consumo &gt;3σ rispetto alla media) e pianificazione capacità.</p>
+</div>
+
+<!-- =================== § 06 SECURITY =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 06 — Sicurezza</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 06</span> Sicurezza: Architettura a Difesa Stratificata</h1>
+
+  <h2 class="subsection">Principio Fondante: Defense in Depth</h2>
+  <p>La sicurezza di DocSense non è affidata a un singolo punto di controllo. È implementata
+  come una sequenza di livelli indipendenti: anche se uno di essi fosse compromesso, gli altri
+  continuerebbero a proteggere i dati. Ogni livello applica controlli distinti, ed è documentato
+  separatamente per facilitare le valutazioni di compliance.</p>
+
+  <div class="layer">
+    <span class="lab">L1</span>
+    <span class="lab-title">Hosting Fisico in Territorio UE</span>
+    <p>Infrastruttura ospitata presso <strong>Hetzner Online GmbH</strong>, datacenter
+    Falkenstein (Germania). Il provider è certificato ISO 27001, garantisce sovranità europea dei
+    dati e dispone di clausole DPA standard. Il sistema non gira su provider con sede extra-UE.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L2</span>
+    <span class="lab-title">Cifratura in Transito (TLS 1.2+)</span>
+    <p>Tutte le comunicazioni esterne sono cifrate con TLS. Certificati X.509 emessi da
+    Let's Encrypt con auto-renew ogni 90 giorni. Cipher suite limitate alle forward-secret
+    (ECDHE) raccomandate da Mozilla SSL Configuration Generator. Redirect HTTP → HTTPS forzato.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L3</span>
+    <span class="lab-title">Network Hardening (nginx)</span>
+    <p>Il reverse proxy applica controlli di sicurezza prima ancora che la richiesta raggiunga il
+    backend: rate limiting (100 r/s per IP, burst 200), body size cap (1 GB), header di sicurezza
+    completi, filtro contro path traversal e injection di header.</p>
+  </div>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 06 — Sicurezza (continua)</span>
+  </div>
+
+  <h2 class="subsection">Security Headers HTTP</h2>
+  <table class="t">
+    <thead><tr><th>Header</th><th>Valore</th><th>Protezione</th></tr></thead>
+    <tbody>
+      <tr><td><code>Strict-Transport-Security</code></td><td>max-age=63072000; includeSubDomains</td><td>HTTPS forzato per 2 anni</td></tr>
+      <tr><td><code>X-Frame-Options</code></td><td>SAMEORIGIN</td><td>Previene clickjacking</td></tr>
+      <tr><td><code>X-Content-Type-Options</code></td><td>nosniff</td><td>Previene MIME type sniffing</td></tr>
+      <tr><td><code>Referrer-Policy</code></td><td>strict-origin-when-cross-origin</td><td>Limita leak di URL cross-origin</td></tr>
+      <tr><td><code>Permissions-Policy</code></td><td>camera=(), microphone=(), geolocation=()</td><td>Disabilita API hardware non necessarie</td></tr>
+    </tbody>
+  </table>
+
+  <div class="layer">
+    <span class="lab">L4</span>
+    <span class="lab-title">Autenticazione: JWT + bcrypt</span>
+    <p>Accesso tramite credenziali username/password. Password hashate con <strong>bcrypt</strong>
+    (cost factor 10, salt univoco). Sessioni gestite con <strong>JWT</strong> firmati HS256 con
+    chiave segreta unica per deploy. Token con scadenza 8 ore, trasmessi solo via header
+    <code>Authorization: Bearer</code>, mai in cookie persistenti.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L5</span>
+    <span class="lab-title">Autorizzazione: Role-Based Access Control</span>
+    <p>Ogni utente ha un ruolo (admin / user). Gli utenti standard vedono esclusivamente le
+    proprie pratiche elaborate. L'isolamento è enforced a livello di query SQL: ogni accesso al
+    database filtra automaticamente per username autenticato. Anche con un token valido, un
+    utente non può accedere ai dati di un altro utente.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L6</span>
+    <span class="lab-title">Processing in Region UE</span>
+    <p>I documenti caricati sono trasmessi esclusivamente agli endpoint Azure europei (Sweden
+    Central). Microsoft garantisce contrattualmente che i contenuti trasmessi ad Azure OpenAI
+    <strong>non vengono utilizzati per training di modelli pubblici</strong>. Le clausole sono
+    nel Microsoft Products and Services Data Protection Addendum.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L7</span>
+    <span class="lab-title">Storage Effimero dei Documenti</span>
+    <p>I pacchetti documentali caricati non sono mai persistiti permanentemente. Vivono in una
+    directory temporanea durante l'elaborazione, e vengono rimossi automaticamente al termine.
+    Cleanup pianificato cron giornaliero alle 03:30 UTC. Filesystem cifrato a riposo con LUKS.</p>
+  </div>
+
+  <div class="layer">
+    <span class="lab">L8</span>
+    <span class="lab-title">Audit Trail Completo</span>
+    <p>Ogni azione significativa è registrata: login, logout, upload pacchetto, completamento
+    elaborazione, download report, accessi falliti. Ogni record include timestamp UTC, utente,
+    tipo evento, IP di origine. L'audit log è esportabile per audit di conformità.</p>
+  </div>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 06 — Sicurezza (continua)</span>
+  </div>
+
+  <h2 class="subsection">Modello di Minaccia Considerato</h2>
+  <table class="t">
+    <thead><tr><th>Minaccia</th><th>Contromisura</th></tr></thead>
+    <tbody>
+      <tr><td>Intercettazione del traffico</td><td>TLS 1.2+ con cipher suite forward-secret</td></tr>
+      <tr><td>Brute force su login</td><td>bcrypt cost 10 + rate limit nginx</td></tr>
+      <tr><td>Furto del token JWT</td><td>Scadenza 8h + nessuna persistenza in cookie</td></tr>
+      <tr><td>Accesso cross-utente non autorizzato</td><td>Filtraggio enforced a livello SQL</td></tr>
+      <tr><td>SQL injection</td><td>Query parametrizzate (prepared statements) ovunque</td></tr>
+      <tr><td>XSS / clickjacking</td><td>Security headers HTTP + escaping in output</td></tr>
+      <tr><td>Path traversal / file inclusion</td><td>Validazione path lato server + chroot temp dir</td></tr>
+      <tr><td>Denial of Service</td><td>Rate limit + body size cap + timeout backend</td></tr>
+      <tr><td>Data leak ai provider AI</td><td>Solo provider EU + DPA contrattualizzato</td></tr>
+      <tr><td>Compromissione del server fisico</td><td>Filesystem cifrato LUKS, backup periodici</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">Gestione delle Credenziali e dei Segreti</h2>
+  <ul>
+    <li>Le chiavi vivono in un file <code>.env</code> con permessi <code>0600</code>, accessibile
+    solo all'utente di sistema che esegue il servizio</li>
+    <li>Nessun segreto è committato nel repository sorgente</li>
+    <li>Le chiavi non sono mai loggate, mai esposte in messaggi di errore, mai trasmesse al client</li>
+    <li>Rotazione periodica pianificata delle API key dei provider esterni</li>
+  </ul>
+</div>
+
+<!-- =================== § 07 GDPR =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 07 — GDPR Compliance</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 07</span> GDPR Compliance: Mappatura Articolo per Articolo</h1>
+
+  <h2 class="subsection">Inquadramento del Trattamento</h2>
+  <p>DocSense opera come <strong>responsabile del trattamento</strong> (Art. 28 GDPR) per conto
+  dei propri clienti, che agiscono come <strong>titolari del trattamento</strong>. Il cliente
+  conserva la piena titolarità dei dati personali contenuti nei documenti caricati. Axialoop di
+  Di Lonardo Alessandro tratta tali dati esclusivamente per la finalità specifica
+  dell'elaborazione tecnica richiesta, secondo istruzioni documentate, e per la durata strettamente
+  necessaria al servizio.</p>
+
+  <h2 class="subsection">Mappatura Articolo per Articolo</h2>
+  <table class="t">
+    <thead><tr><th>Articolo</th><th>Requisito</th><th>Implementazione DocSense</th></tr></thead>
+    <tbody>
+      <tr><td><code>Art. 5(1)(a)</code></td><td>Liceità, correttezza, trasparenza</td><td>Base giuridica nel contratto cliente-titolare; DPA scritto</td></tr>
+      <tr><td><code>Art. 5(1)(b)</code></td><td>Limitazione delle finalità</td><td>Trattamento limitato all'elaborazione; nessun training di modelli</td></tr>
+      <tr><td><code>Art. 5(1)(c)</code></td><td>Minimizzazione dei dati</td><td>Solo i documenti necessari vengono trasmessi</td></tr>
+      <tr><td><code>Art. 5(1)(e)</code></td><td>Limitazione conservazione</td><td>Documenti caricati eliminati entro 24 h via cron</td></tr>
+      <tr><td><code>Art. 5(1)(f)</code></td><td>Integrità e riservatezza</td><td>TLS in transito + LUKS a riposo + JWT + RBAC</td></tr>
+      <tr><td><code>Art. 25</code></td><td>Privacy by Design e by Default</td><td>Hosting EU, processing EU, cancellazione automatica</td></tr>
+      <tr><td><code>Art. 28</code></td><td>Contratto con il responsabile</td><td>Template DPA standardizzato fornito al cliente</td></tr>
+      <tr><td><code>Art. 30</code></td><td>Registro attività di trattamento</td><td>Audit log SQLite + log JSONL per sessione</td></tr>
+      <tr><td><code>Art. 32</code></td><td>Sicurezza del trattamento</td><td>Architettura a 8 livelli (vedi § 06)</td></tr>
+      <tr><td><code>Art. 33</code></td><td>Notifica violazioni</td><td>Procedura formalizzata: notifica al titolare entro 24 h</td></tr>
+      <tr><td><code>Art. 35</code></td><td>Valutazione d'impatto (DPIA)</td><td>Modello DPIA disponibile a supporto del titolare</td></tr>
+      <tr><td><code>Art. 44–49</code></td><td>Trasferimenti verso paesi terzi</td><td>Nessun trasferimento extra-UE: hosting DE, OCR/LLM Sweden Central</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 07 — GDPR Compliance (continua)</span>
+  </div>
+
+  <h2 class="subsection">Diritti degli Interessati</h2>
+  <table class="t">
+    <thead><tr><th>Diritto</th><th>Supporto tecnico fornito</th></tr></thead>
+    <tbody>
+      <tr><td>Art. 15 — Accesso</td><td>Export su richiesta dei log relativi a una pratica specifica</td></tr>
+      <tr><td>Art. 16 — Rettifica</td><td>Sostituzione documenti su nuovo upload</td></tr>
+      <tr><td>Art. 17 — Cancellazione</td><td>Procedura di hard-delete su richiesta del titolare entro 72 h</td></tr>
+      <tr><td>Art. 18 — Limitazione</td><td>Sospensione elaborazioni su pratica specifica via flag</td></tr>
+      <tr><td>Art. 20 — Portabilità</td><td>Output in formato standard (DOCX, JSONL) trasferibili</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">Modello di Responsabilità</h2>
+  <table class="t">
+    <thead><tr><th>Ruolo</th><th>Soggetto</th><th>Obblighi principali</th></tr></thead>
+    <tbody>
+      <tr><td>Interessato</td><td>Persona fisica i cui dati sono nei documenti</td><td>Nessun obbligo; titolare di diritti</td></tr>
+      <tr><td>Titolare</td><td>Cliente che carica i documenti</td><td>Informativa, base giuridica, DPA, gestione richieste</td></tr>
+      <tr><td>Responsabile</td><td>Axialoop di Di Lonardo Alessandro</td><td>Misure tecniche, audit trail, notifica violazioni</td></tr>
+      <tr><td>Sub-responsabili</td><td>Microsoft Azure, Hetzner</td><td>DPA standard EU, no trasferimenti extra-UE</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="title">Trasparenza Contrattuale</div>
+    L'attivazione di una nuova installazione DocSense include sempre la firma di un Data
+    Processing Agreement (DPA) basato sul template fornito da Axialoop. Il DPA elenca
+    esplicitamente i sub-responsabili (Microsoft, Hetzner), i flussi di dati, le misure di
+    sicurezza adottate, i tempi di conservazione e la procedura di notifica violazioni.
+  </div>
+
+  <h2 class="subsection">Posizione su Training di Modelli AI</h2>
+  <p>I contenuti dei documenti caricati e i prompt sottoposti ai modelli LLM <strong>non vengono
+  utilizzati per addestrare modelli di intelligenza artificiale</strong>, né da Axialoop né da
+  Microsoft. Questo è garantito contrattualmente da Microsoft per Azure OpenAI Service tramite
+  il Microsoft Products and Services Data Protection Addendum e da Axialoop nel proprio DPA con
+  il titolare.</p>
+</div>
+
+<!-- =================== § 08 DEPLOY =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 08 — Modello di Deploy</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 08</span> Modello di Deploy: Tenant Dedicato</h1>
+
+  <h2 class="subsection">Architettura Single-Tenant per Cliente</h2>
+  <p>DocSense viene installato in modalità <strong>tenant dedicato</strong>: ogni cliente riceve
+  un'istanza isolata del sistema, con il proprio dominio, le proprie credenziali, il proprio
+  database, i propri log e le proprie chiavi API. Non esiste una piattaforma SaaS condivisa con
+  account multipli — ogni deploy è un ambiente a sé stante.</p>
+
+  <ul>
+    <li><strong>Isolamento totale</strong> dei dati tra clienti diversi — zero contaminazione cross-tenant</li>
+    <li><strong>Personalizzazione su misura</strong> — prompt, macroaree, template configurabili</li>
+    <li><strong>Branding white-label</strong> — interfaccia e documenti con il brand del cliente</li>
+  </ul>
+
+  <h2 class="subsection">Componenti di un Deploy Standard</h2>
+  <table class="t">
+    <thead><tr><th>Componente</th><th>Dettaglio</th></tr></thead>
+    <tbody>
+      <tr><td>Sottodominio dedicato</td><td><code>cliente.docsense.app</code> o dominio personalizzato</td></tr>
+      <tr><td>Server cloud</td><td>VPS Hetzner con risorse dimensionate al volume previsto</td></tr>
+      <tr><td>Certificato TLS</td><td>Let's Encrypt con auto-renew</td></tr>
+      <tr><td>Database</td><td>SQLite locale al server, backup giornaliero automatico</td></tr>
+      <tr><td>Azure OpenAI</td><td>Deployment dedicato o quota condivisa, configurato in EU</td></tr>
+      <tr><td>Azure Document Intelligence</td><td>Risorsa dedicata o condivisa, sempre in EU</td></tr>
+      <tr><td>Utenti applicativi</td><td>Configurati dal cliente, ruoli admin/user</td></tr>
+      <tr><td>Branding</td><td>Logo, intestazioni documenti, colore tema</td></tr>
+      <tr><td>Profilo verticale</td><td>Configurazione framework normativo (vedi § 09)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="title">Conseguenza Diretta sul GDPR</div>
+    Il modello single-tenant elimina alla radice una categoria intera di rischi GDPR: quelli
+    derivanti dalla coabitazione di dati di titolari diversi sulla stessa infrastruttura logica.
+    Ogni cliente ha la garanzia tecnica che i propri dati non condividono mai memoria, processo,
+    database o filesystem con dati di altri clienti.
+  </div>
+</div>
+
+<!-- =================== § 09 NORME =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 09 — Framework &amp; Verticali</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 09</span> Framework Pre-Configurati e Verticali Applicativi</h1>
+
+  <h2 class="subsection">Il Problema Generale: Volume Documentale &amp; Sintesi Tracciabile</h2>
+  <p>In molti settori professionali — gestione documentale aziendale, compliance normativa,
+  consulenza tecnica, due diligence, verifica di conformità, screening di fornitori — l'analisi
+  di pacchetti documentali estesi rappresenta una fase critica che condiziona tempi e qualità
+  dell'intero processo. La lettura sistematica di 200–500 documenti eterogenei richiede tipicamente
+  giornate di lavoro, con un rischio non trascurabile di campionamento parziale, di omissioni e
+  di disomogeneità nello stile della relazione finale.</p>
+
+  <p>DocSense risponde a questo problema strutturale leggendo <em>tutti</em> i documenti del
+  pacchetto in modo deterministico e sistematico, e producendo una relazione narrativa
+  strutturata in formato Word, pronta per essere utilizzata come base di lavoro. L'output mantiene
+  la tracciabilità documento-paragrafo (regola 1:1:1) e segue uno schema riproducibile e coerente.</p>
+
+  <h2 class="subsection">10 Framework Normativi Pre-Configurati</h2>
+  <p>Il sistema è già configurato per operare sui seguenti 10 framework normativi e di settore,
+  con prompt, macroaree e logiche di estrazione tarate sullo specifico standard di riferimento:</p>
+
+  <div class="chips">
+    <span class="chip">ISO 9001 — Qualità</span>
+    <span class="chip">ISO 14001 — Ambiente</span>
+    <span class="chip">ISO 45001 — Salute &amp; Sicurezza</span>
+    <span class="chip">ISO 27001 — Sicurezza Informazioni</span>
+    <span class="chip">ISO 13485 — Dispositivi Medici</span>
+    <span class="chip">ISO 22000 — Sicurezza Alimentare</span>
+    <span class="chip">ISO 50001 — Gestione Energia</span>
+    <span class="chip">ISO 37001 — Anticorruzione</span>
+    <span class="chip">SA 8000 — Responsabilità Sociale</span>
+    <span class="chip">ESG / CSRD-ESRS — Sostenibilità</span>
+  </div>
+
+  <p>Per ciascuno di questi framework, DocSense include: un <strong>prompt specifico</strong> tarato
+  sullo standard, una <strong>griglia di macroaree</strong> coerente con la struttura della norma,
+  un <strong>template DOCX</strong> di output, e un <strong>set di pattern di estrazione metadati</strong>
+  (riconoscimento certificato, ente di certificazione, scope, validità).</p>
+
+  <div class="callout">
+    <div class="title">Estendibilità Garantita</div>
+    L'architettura non è cablata sui 10 framework attuali: l'aggiunta di uno nuovo richiede
+    esclusivamente la creazione di un profilo di configurazione (prompt + macroaree + template +
+    pattern). Nessuna modifica al codice del motore. Un nuovo framework può essere reso operativo
+    in pochi giorni di lavoro di configurazione e validazione.
+  </div>
+</div>
+
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 09 — Framework &amp; Verticali (continua)</span>
+  </div>
+
+  <h2 class="subsection">Versatilità ad Altri Domini Applicativi</h2>
+  <p>Il motore di DocSense è strutturalmente agnostico al dominio applicativo. Cambiando i tre
+  artefatti di configurazione (prompt narrativo, macroaree tematiche, template DOCX), il sistema
+  si applica a qualunque attività professionale che richieda l'analisi sistematica di pacchetti
+  documentali e la produzione di report strutturati e tracciabili.</p>
+
+  <table class="t">
+    <thead><tr><th>Dominio applicativo</th><th>Tipologia documenti</th><th>Output tipico</th></tr></thead>
+    <tbody>
+      <tr><td>Verifica documentale di conformità</td><td>Manuali, procedure, registrazioni, certificazioni</td><td>Relazione di evidenze per macroaree del framework</td></tr>
+      <tr><td>Gap analysis preliminare</td><td>Documentazione attuale dell'organizzazione</td><td>Mappatura presidi vs requisiti, identificazione gap</td></tr>
+      <tr><td>Compliance ambientale industriale</td><td>Autorizzazioni AIA/AUA, dichiarazioni rifiuti, VIA</td><td>Relazione di adeguatezza per autorizzazioni o rinnovi</td></tr>
+      <tr><td>Sicurezza sul lavoro (D.Lgs. 81/08)</td><td>DVR, DUVRI, formazione, sorveglianza, DPI, verbali</td><td>Mappatura evidenze per macroaree di sicurezza</td></tr>
+      <tr><td>Due diligence M&amp;A</td><td>Bilanci, contratti, atti societari, contenziosi, IP</td><td>Memorandum di sintesi per area di rischio</td></tr>
+      <tr><td>Compliance privacy / sicurezza informazioni</td><td>Policy, procedure, registri trattamenti, valutazioni</td><td>Inventario evidenze per controlli normativi</td></tr>
+      <tr><td>Compliance 231 (responsabilità enti)</td><td>MOG, procedure di controllo, formazione, OdV</td><td>Mappatura presidi per categorie di reato presupposto</td></tr>
+      <tr><td>Qualifica e screening fornitori</td><td>Certificazioni, schede tecniche, dichiarazioni</td><td>Scheda di qualifica standardizzata e comparabile</td></tr>
+      <tr><td>Screening documentale legale</td><td>Contratti, scritture private, contenziosi</td><td>Sintesi tematica con evidenze testuali oggettive</td></tr>
+      <tr><td>Bandi e appalti pubblici</td><td>Documentazione tecnica e amministrativa di gara</td><td>Relazione di completezza e conformità al disciplinare</td></tr>
+      <tr><td>Reporting di sostenibilità</td><td>Bilanci ESG, dichiarazioni non finanziarie</td><td>Sintesi strutturata per area di rendicontazione</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">Cosa Si Configura per un Nuovo Verticale</h2>
+  <ol>
+    <li><strong>Prompt narrativo</strong> — riscritto per riflettere linguaggio, obiettivi e vincoli del dominio</li>
+    <li><strong>Macroaree tematiche</strong> — categorie usate per raggruppare i paragrafi nel report finale</li>
+    <li><strong>Template DOCX di output</strong> — intestazione, logo, struttura indice, formattazione</li>
+    <li><strong>Regole di estrazione metadati</strong> — pattern per riconoscere automaticamente nome cliente, P.IVA, codici progetto</li>
+  </ol>
+</div>
+
+<!-- =================== § 10 BACKUP =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 10 — Backup &amp; Continuità</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 10</span> Continuità Operativa e Backup</h1>
+
+  <h2 class="subsection">Backup Automatici Giornalieri</h2>
+  <p>Il database SQLite del sistema viene salvato automaticamente ogni notte alle 03:15 UTC
+  tramite un job cron pianificato. I backup vengono:</p>
+  <ul>
+    <li>Compressi con gzip (riduzione tipica 5–10×)</li>
+    <li>Nominati con la data del backup (es. <code>daily_20260508.db.gz</code>)</li>
+    <li>Conservati per 30 giorni in rotazione</li>
+    <li>Verificati con checksum SHA-256 al momento della scrittura</li>
+  </ul>
+  <p>In aggiunta ai backup giornalieri, viene conservato uno snapshot mensile permanente per i
+  successivi 12 mesi.</p>
+
+  <h2 class="subsection">Procedura di Disaster Recovery</h2>
+  <ol>
+    <li><strong>Provisioning nuovo server</strong> — VPS Hetzner identico, configurato via Ansible (~15 minuti)</li>
+    <li><strong>Ripristino del DB</strong> — backup gzip decompresso, controllo integrità con <code>PRAGMA integrity_check</code></li>
+    <li><strong>Riconfigurazione DNS</strong> — record A/AAAA puntato al nuovo IP (TTL 300 s)</li>
+    <li><strong>Re-issue certificato TLS</strong> — Let's Encrypt rilascia un nuovo cert in pochi minuti</li>
+    <li><strong>Smoke test</strong> — login, lista pratiche, upload pacchetto demo, generazione report</li>
+  </ol>
+
+  <div class="callout">
+    <div class="title">RPO e RTO Indicativi</div>
+    <strong>Recovery Point Objective (RPO):</strong> al massimo 24 ore.<br>
+    <strong>Recovery Time Objective (RTO):</strong> 2–4 ore, in funzione della tempestività.<br>
+    Per scenari business-critical sono disponibili upgrade architetturali (backup off-site continuo,
+    replica master-slave) discussi nella sezione Roadmap.
+  </div>
+
+  <h2 class="subsection">Cleanup Automatico dei Dati Temporanei</h2>
+  <p>Un secondo job cron alle 03:30 UTC rimuove automaticamente i file temporanei prodotti dalle
+  elaborazioni del giorno: pacchetti decompressi, file OCR intermedi, output DOCX intermedi, cache
+  di sessione &gt;24h. Il log di cleanup è conservato per evidenza di compliance.</p>
+</div>
+
+<!-- =================== § 11 MONITORING =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 11 — Monitoraggio</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 11</span> Monitoraggio e Osservabilità</h1>
+
+  <h2 class="subsection">Logging Strutturato</h2>
+  <ul>
+    <li><strong>Log applicativo</strong> — emesso da FastAPI tramite stdout, raccolto da
+    <code>systemd-journald</code>. Interrogabile con <code>journalctl</code>.</li>
+    <li><strong>Log di sessione (JSONL)</strong> — un file per elaborazione. Ogni riga è un evento
+    JSON timestampato. Consente analisi forense puntuale di ogni singola pratica elaborata.</li>
+  </ul>
+
+  <h2 class="subsection">Health Check e Liveness</h2>
+  <p>Il sistema espone un endpoint <code>/api/health</code> che restituisce in JSON lo stato dei
+  componenti: connettività al DB, raggiungibilità Azure, occupazione disco, worker attivi.
+  Integrabile con monitoring esterno (UptimeRobot, Better Stack) per allerta proattiva.</p>
+
+  <h2 class="subsection">Heartbeat di Sessione</h2>
+  <p>Durante ogni elaborazione, il worker emette un evento <code>heartbeat</code> ogni 5 secondi
+  con metriche di processo (PID, RSS, profondità coda, task in volo). L'assenza di heartbeat per
+  più di 30 secondi su una sessione attiva genera un evento di errore.</p>
+
+  <h2 class="subsection">Token Metering e Reportistica Tecnica</h2>
+  <p>Ogni chiamata ai provider AI è tracciata con il consumo esatto di token. I dati permettono:
+  reportistica tecnica del consumo per cliente / periodo, allerta su anomalie, pianificazione
+  capacità.</p>
+
+  <div class="callout">
+    <div class="title">Trasparenza Operativa</div>
+    Il cliente ha sempre accesso al consumo tecnico effettivo della propria istanza. Ogni
+    elaborazione è riconducibile a metriche oggettive: tempo, token, dimensione documenti, esito.
+  </div>
+</div>
+
+<!-- =================== § 12 ROADMAP =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 12 — Roadmap di Evoluzione</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 12</span> Roadmap di Evoluzione</h1>
+
+  <div class="callout">
+    Questa sezione documenta le direzioni di sviluppo identificate per le versioni successive di
+    DocSense. Ogni punto descrive una funzionalità non ancora implementata, il problema che
+    risolverebbe e come si integrerebbe nell'architettura esistente.
+  </div>
+
+  <h2 class="subsection">12.1 — Autenticazione Multi-Fattore (MFA)</h2>
+  <p><strong>Cosa sarebbe:</strong> aggiunta di un secondo fattore di autenticazione (TOTP via
+  app come Authy o Google Authenticator, oppure WebAuthn / passkey) per tutti gli utenti.</p>
+  <p><strong>Cosa risolverebbe:</strong> il furto di password non basterebbe più per accedere al
+  sistema. Innalza significativamente il bar di sicurezza, anche in vista di certificazioni
+  ISO 27001.</p>
+
+  <h2 class="subsection">12.2 — Backup Off-Site Cifrato</h2>
+  <p><strong>Cosa sarebbe:</strong> replica giornaliera dei backup verso un secondo provider
+  cloud europeo indipendente (OVH, Scaleway, Backblaze EU), con cifratura client-side.</p>
+  <p><strong>Cosa risolverebbe:</strong> elimina il single point of failure rappresentato dalla
+  coincidenza tra server primario e archivio backup. Garantisce business continuity anche in
+  caso di compromissione completa del provider primario.</p>
+
+  <h2 class="subsection">12.3 — Catalogo Multi-Verticale Espanso</h2>
+  <p><strong>Cosa sarebbe:</strong> ampliamento della libreria di profili pre-configurati oltre
+  i 10 framework attuali (es. IATF 16949, AS 9100, TISAX, NIS2, AI Act).</p>
+  <p><strong>Cosa risolverebbe:</strong> riduce drasticamente il time-to-value per nuovi clienti
+  in settori specifici e abilita un onboarding rapido su norme di nicchia.</p>
+
+  <h2 class="subsection">12.4 — Modulo di Verifica Conformità Assistita</h2>
+  <p><strong>Cosa sarebbe:</strong> uno strato applicativo opzionale che, oltre a sintetizzare
+  le evidenze, propone una <em>checklist preliminare</em> di copertura rispetto al framework
+  selezionato, con citazione esplicita del documento e del passaggio testuale rilevante.</p>
+  <p><strong>Cosa risolverebbe:</strong> accorcia la distanza tra "lettura documenti" e
+  "redazione della relazione finale", mantenendo intatta la responsabilità professionale.</p>
+
+  <div class="footer-note">
+    Le funzionalità descritte non sono parte del sistema attuale. Rappresentano direzioni di
+    sviluppo identificate sulla base dell'architettura esistente.
+  </div>
+</div>
+
+<!-- =================== § 13 GLOSSARIO =================== -->
+<div class="pg-section-break">
+  <div class="pg-header">
+    <span>axialoop · DocSense — Documentazione Tecnica di Sistema</span>
+    <span>§ 13 — Glossario Tecnico</span>
+  </div>
+
+  <h1 class="section"><span class="sect-num">§ 13</span> Glossario Tecnico</h1>
+
+  <table class="t">
+    <thead><tr><th>Termine</th><th>Significato pratico</th></tr></thead>
+    <tbody>
+      <tr><td><strong>OCR</strong><br><em>Optical Character Recognition</em></td><td>Tecnologia che converte immagini di testo in testo digitale modificabile</td></tr>
+      <tr><td><strong>LLM</strong><br><em>Large Language Model</em></td><td>Modello di intelligenza artificiale per il linguaggio naturale</td></tr>
+      <tr><td><strong>Pacchetto documentale</strong></td><td>Insieme strutturato di documenti relativi a un cliente o un caso, fornito come archivio compresso</td></tr>
+      <tr><td><strong>Framework normativo</strong></td><td>Insieme strutturato di requisiti rispetto ai quali la documentazione viene analizzata</td></tr>
+      <tr><td><strong>JWT</strong><br><em>JSON Web Token</em></td><td>Credenziale cifrata che identifica l'utente per ogni richiesta, valida per un periodo limitato</td></tr>
+      <tr><td><strong>bcrypt</strong></td><td>Algoritmo di hashing per password progettato per essere lento e resistente a brute force</td></tr>
+      <tr><td><strong>TLS</strong><br><em>Transport Layer Security</em></td><td>Protocollo di cifratura che protegge le comunicazioni tra browser e server (la "S" di HTTPS)</td></tr>
+      <tr><td><strong>DPA</strong><br><em>Data Processing Agreement</em></td><td>Contratto che disciplina il trattamento dei dati personali tra titolare e responsabile</td></tr>
+      <tr><td><strong>RPO</strong><br><em>Recovery Point Objective</em></td><td>Massima quantità di dati che si può tollerare di perdere in caso di incidente</td></tr>
+      <tr><td><strong>RTO</strong><br><em>Recovery Time Objective</em></td><td>Tempo massimo accettabile per ripristinare l'operatività dopo un incidente</td></tr>
+      <tr><td><strong>SSE</strong><br><em>Server-Sent Events</em></td><td>Tecnologia che permette al server di inviare aggiornamenti in tempo reale al browser</td></tr>
+      <tr><td><strong>JSONL</strong><br><em>JSON Lines</em></td><td>Formato in cui ogni riga è un oggetto JSON autonomo, ideale per log strutturati</td></tr>
+      <tr><td><strong>Tenant</strong></td><td>Istanza isolata del sistema dedicata a un singolo cliente</td></tr>
+      <tr><td><strong>White-label</strong></td><td>Modalità di distribuzione in cui il prodotto è presentato con il brand del cliente</td></tr>
+      <tr><td><strong>DPIA</strong><br><em>Data Protection Impact Assessment</em></td><td>Valutazione d'impatto sulla protezione dei dati, prevista dall'art. 35 GDPR</td></tr>
+      <tr><td><strong>RBAC</strong><br><em>Role-Based Access Control</em></td><td>Sistema di permessi basato sul ruolo dell'utente (admin, user)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

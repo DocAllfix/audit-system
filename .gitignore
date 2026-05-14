@@ -71,6 +71,24 @@ desktop.ini
 testimplementazioni/
 filetestazienda/
 testlocalresults/
+testllmnew/
+
+# --- Sample/ZIP pratiche cliente (mai committare: dati reali) ---
+samples/
+*.zip
+!archive/**/*.zip
+!docs/**/*.zip
+
+# --- Output docx scratch root (audit cliente reali) ---
+/Audit_V2_*.docx
+/Evidence_Report_*.docx
+/Evidenze_Strutturate_*.docx
+/Compliance_Mode_*.docx
+/ISAM_*.docx
+/[0-9]*_*.docx
+
+# --- Claude Code config locale ---
+.claude/
 
 # --- Backup / snapshot ---
 *.bak
