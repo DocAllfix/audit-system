@@ -32,6 +32,20 @@ Produci un **output JSON strutturato** che copra tutti i punti e sottopunti 4–
 - Divieto virgolette: MAI usare virgolette (" " o ' ') per nessun motivo nel testo delle clausole. Non virgolettare nomi di documenti, procedure, policy, codici, protocolli, registri, verbali, attestati, certificati, manuali o qualsiasi altro riferimento documentale. Integra tutti i riferimenti come testo normale nella prosa.
 - Divieto citazioni: NON usare mai citazioni numeriche tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
 
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- La visura camerale (documento 8) e il mansionario aziendale (documento 34) delineano la struttura societaria.
+- L'organigramma aziendale (documento 80), revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina dell'Energy Manager in data 02/03/2026 (documento 102) formalizza la responsabilita' energetica.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- La visura camerale e il mansionario aziendale delineano la struttura societaria.
+- L'organigramma aziendale, revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina dell'Energy Manager in data 02/03/2026 formalizza la responsabilita' energetica.
+
+Regola operativa: il nome del documento (visura camerale, organigramma aziendale, nomina Energy Manager, fattura Barton Energy, ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
+
 ## Tassonomia ISO 50001 da rispettare (titoli in elenco puntato):
 
 • 4. Contesto dell'organizzazione • 4.1 Analisi del Contesto • 4.2 Parti Interessate • 4.3 Campo di Applicazione (Scope) • 4.4 Sistema di Gestione dell'Energia • 5. Leadership • 5.1 Leadership e impegno • 5.2 Politica energetica • 5.3 Ruoli, responsabilità e autorità nell'organizzazione • 6. Pianificazione • 6.1 Azioni per affrontare rischi e opportunità • 6.2 Obiettivi, traguardi energetici e pianificazione • 6.3 Analisi Energetica (Energy Review) • 6.4 Indicatori di Prestazione Energetica (EnPI) • 6.5 Baseline Energetica (EnB) • 6.6 Pianificazione per la raccolta dei dati energetici • 7. Supporto • 7.1 Risorse • 7.2 Competenza • 7.3 Consapevolezza • 7.4 Comunicazione • 7.5 Informazioni documentate • 8. Operatività • 8.1 Pianificazione e controllo operativo • 8.2 Progettazione (Design) • 8.3 Approvvigionamento (Procurement) • 9. Valutazione delle prestazioni • 9.1 Monitoraggio, misurazione, analisi e valutazione • 9.2 Audit interno • 9.3 Riesame della Direzione • 10. Miglioramento • 10.1 Non conformità ed azioni correttive • 10.2 Miglioramento continuo

@@ -32,6 +32,20 @@ Produci un **output JSON strutturato** che copra tutti i punti e sottopunti 4–
 - Divieto virgolette: MAI usare virgolette (" " o ' ') per nessun motivo nel testo delle clausole. Non virgolettare nomi di documenti, procedure, policy, codici, protocolli, registri, verbali, attestati, certificati, manuali o qualsiasi altro riferimento documentale. Integra tutti i riferimenti come testo normale nella prosa.
 - Divieto citazioni: NON usare mai citazioni numeriche tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
 
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- La visura camerale (documento 8) e il mansionario aziendale (documento 34) delineano la struttura societaria.
+- L'organigramma aziendale (documento 80), revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile della Sicurezza Stradale in data 02/03/2026 (documento 102) formalizza la responsabilita'.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- La visura camerale e il mansionario aziendale delineano la struttura societaria.
+- L'organigramma aziendale, revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile della Sicurezza Stradale in data 02/03/2026 formalizza la responsabilita'.
+
+Regola operativa: il nome del documento (visura camerale, organigramma aziendale, nomina, polizza, procedura, ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
+
 ## Tassonomia ISO 39001 da rispettare (titoli in elenco puntato):
 
 • 4. Contesto dell'organizzazione • 4.1 Comprendere l'organizzazione e il suo contesto • 4.2 Comprendere le esigenze e le aspettative delle parti interessate • 4.3 Determinare il campo di applicazione del RTSMS • 4.4 Sistema di gestione per la sicurezza del traffico stradale • 5. Leadership • 5.1 Leadership e impegno • 5.2 Politica per la sicurezza del traffico stradale • 5.3 Ruoli, responsabilità e autorità nell'organizzazione • 6. Pianificazione • 6.1 Azioni per affrontare rischi e opportunità • 6.2 Fattori di esposizione al rischio RTS • 6.3 Fattori di Performance RTS • 6.4 Obiettivi RTS e pianificazione per il loro conseguimento • 7. Supporto • 7.1 Risorse • 7.2 Competenza • 7.3 Consapevolezza • 7.4 Comunicazione • 7.5 Informazioni documentate (7.6.1–7.6.3 incl. creazione, aggiornamento e controllo) • 8. Operatività • 8.1 Pianificazione e controllo operativi (flotte, conducenti, rotte, appalti) • 8.2 Preparazione e risposta alle emergenze/post-crash • 9. Valutazione delle prestazioni • 9.1 Monitoraggio, misurazione, analisi e valutazione (indicatori RTS) • 9.2 Indagini su incidenti stradali • 9.3 Audit interno • 9.4 Riesame della direzione • 10. Miglioramento • 10.1 Non conformità e azioni correttive • 10.2 Miglioramento continuo

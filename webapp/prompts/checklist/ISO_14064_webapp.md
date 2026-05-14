@@ -15,6 +15,21 @@ Genera un **output JSON strutturato** che copra tutte le clausole ISO 14064-1, m
 ## VINCOLI (OBBLIGATORI)
 
 - Divieti: mai citare nomi di file; mai usare "vedi allegato/E XX"; niente elenchi puntati dentro i paragrafi testuali (consentiti solo per i titoli di clausole/sottoclausole).
+- Divieto citazioni numeriche: NON usare mai citazioni tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
+
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- L'inventario delle emissioni GHG (documento 8) e la metodologia di calcolo (documento 34) coprono lo scope 1 e 2.
+- Il bilancio di sostenibilita' (documento 80), revisionato al 09/04/2026, riporta i fattori di emissione.
+- La nomina del Climate Manager in data 02/03/2026 (documento 102) formalizza la responsabilita'.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- L'inventario delle emissioni GHG e la metodologia di calcolo coprono lo scope 1 e 2.
+- Il bilancio di sostenibilita', revisionato al 09/04/2026, riporta i fattori di emissione.
+- La nomina del Climate Manager in data 02/03/2026 formalizza la responsabilita'.
+
+Regola operativa: il nome del documento (inventario GHG, metodologia di calcolo, bilancio di sostenibilita', nomina, ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
 - Tracciabilità: trascrivi numeri/ID/protocolli e date esattamente come nei documenti (nessuna normalizzazione).
 - Privacy: minimizzazione; integra solo ciò che è pertinente all'audit.
 - Informazioni non rinvenute nei file digitali: NON scrivere "manca"; dichiara "presente", inteso che l'informazione è stata visionata in audit ed è conforme allo standard.

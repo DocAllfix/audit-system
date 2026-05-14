@@ -17,6 +17,21 @@ Genera un **output JSON strutturato** "Checklist di Audit Modello EASI®️/ESG"
 ## VINCOLI (OBBLIGATORI)
 
 - Divieti: mai citare nomi di file; mai usare "vedi allegato/E XX"; niente elenchi puntati dentro i paragrafi testuali (consentiti solo per i titoli di clausole/sottoclausole).
+- Divieto citazioni numeriche: NON usare mai citazioni tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
+
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- La politica di sostenibilita' (documento 8) e il bilancio ESG (documento 34) delineano gli impegni dell'organizzazione.
+- L'organigramma aziendale (documento 80), revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Sustainability Manager in data 02/03/2026 (documento 102) formalizza la responsabilita'.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- La politica di sostenibilita' e il bilancio ESG delineano gli impegni dell'organizzazione.
+- L'organigramma aziendale, revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Sustainability Manager in data 02/03/2026 formalizza la responsabilita'.
+
+Regola operativa: il nome del documento (politica di sostenibilita', bilancio ESG, codice etico, nomina, procedura, ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
 - Tracciabilità: trascrivi numeri/ID/protocolli e date esattamente come nei documenti (nessuna normalizzazione).
 - Privacy: minimizzazione; integra solo ciò che è pertinente all'audit.
 - Informazioni non rinvenute nei file digitali: NON scrivere "manca"; dichiara "presente", inteso che l'informazione è stata visionata in audit ed è conforme allo standard.

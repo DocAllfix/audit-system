@@ -41,16 +41,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Bootstrap: il file vive in features/pending-validation/schematic-output-mode/
-# ma deve importare da webapp/v2/. Aggiungiamo webapp/ a sys.path.
+# Path bootstrap: il client vive in webapp/v2/ accanto a narrative_client_v2.py;
+# il prompt vive in webapp/prompts/schematic_evidence_prompt_v2.md.
 # ──────────────────────────────────────────────────────────────────────────────
 
 _THIS_FILE = Path(__file__).resolve()
-_REPO_ROOT = _THIS_FILE.parent.parent.parent.parent
-_WEBAPP_DIR = _REPO_ROOT / "webapp"
-
-if str(_WEBAPP_DIR) not in sys.path:
-    sys.path.insert(0, str(_WEBAPP_DIR))
+_WEBAPP_DIR = _THIS_FILE.parent.parent  # webapp/
 
 from v2.azure_openai_client_v2 import (  # noqa: E402
     AzureOpenAIClientV2,
@@ -75,7 +71,7 @@ from v2.narrative_client_v2 import (  # noqa: E402
 # Prompt schematic loader
 # ──────────────────────────────────────────────────────────────────────────────
 
-_SCHEMATIC_PROMPT_PATH = _THIS_FILE.parent / "schematic_evidence_prompt.md"
+_SCHEMATIC_PROMPT_PATH = _WEBAPP_DIR / "prompts" / "schematic_evidence_prompt_v2.md"
 
 _SCHEMATIC_PROMPT_FALLBACK_MIN = """
 Sei un motore di trasformazione testuale per documenti di audit.

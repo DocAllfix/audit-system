@@ -2,7 +2,7 @@
 Test schematic_client_v2 — modalita' prosa schematica telegrafica.
 
 Test smoke: import, prompt loaded, structure functions, builder reminder.
-Test deeper richiede credenziali Azure ed e' E2E nel worktree (Step D).
+Test deeper richiede credenziali Azure ed e' E2E sul backend di test.
 """
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Bootstrap path: il client vive nella stessa cartella di questo test
-_THIS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_THIS_DIR))
+# Bootstrap path: il client vive in webapp/v2/ accanto a narrative_client_v2
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_WEBAPP_DIR = _REPO_ROOT / "webapp"
+sys.path.insert(0, str(_WEBAPP_DIR))
 
-from schematic_client_v2 import (  # noqa: E402
+from v2.schematic_client_v2 import (  # noqa: E402
     _build_schematic_user_prompt,
     _load_schematic_prompt,
     _SCHEMATIC_PROMPT_PATH,

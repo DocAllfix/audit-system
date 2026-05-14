@@ -9,12 +9,15 @@ import { useSSEProcess } from '@/hooks/useSSEProcess';
 import {
   FileArchive, Rocket, Download, ArrowRight, CheckCircle2,
   AlertTriangle, BarChart3, FolderOpen, Loader2, Files, Building2,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Sparkles,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import FileDropzone from '@/components/shared/FileDropzone';
 import PipelineStages from '@/components/shared/PipelineStages';
 import confetti from 'canvas-confetti';
@@ -89,6 +92,7 @@ export default function GeneraReport() {
   const [editingName, setEditingName]     = useState(false);
   const [nameConfirmed, setNameConfirmed] = useState(false);
   const [showUnprocessed, setShowUnprocessed] = useState(false);
+  const [analysisMode, setAnalysisMode]   = useState('schematic'); // default modalità di analisi
 
   const queryClient  = useQueryClient();
   const { startSession, setTab1Status, setCompanyName: storeSetCompanyName, addNotification } = useWorkflowStore();
@@ -147,6 +151,7 @@ export default function GeneraReport() {
 
     const form = new FormData();
     form.append('file', file);
+    form.append('output_mode', analysisMode);
 
     await sse.start('/api/v2/report/process?legacy_events=true', form, {
       onDone: (data) => {
@@ -292,6 +297,39 @@ export default function GeneraReport() {
                     </div>
                   </>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card className="glass">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-primary" /> Modalità di Analisi
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Select value={analysisMode} onValueChange={setAnalysisMode}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleziona modalità..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="schematic">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-primary">Schematica</span>
+                        <span className="text-muted-foreground text-xs">prosa key:value, machine-readable</span>
+                        <Badge variant="outline" className="text-[10px]">Default</Badge>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="narrative">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-primary">Narrativa</span>
+                        <span className="text-muted-foreground text-xs">prosa discorsiva, leggibile</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  La modalità schematica produce schede telegrafiche key:value (default). La narrativa produce paragrafi discorsivi come la modalità storica PROD.
+                </p>
               </CardContent>
             </Card>
 

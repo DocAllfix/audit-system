@@ -288,6 +288,7 @@ def process_zip_v2(
     _client=None,  # injectable per test
     provider: Optional[str] = None,
     zip_filename: str = "",
+    output_mode: Optional[str] = None,  # "schematic" | "narrative" | None (default schematic)
 ) -> Dict[str, Any]:
     """
     Pipeline V2 completa.
@@ -867,20 +868,25 @@ def process_zip_v2(
                 "batches_total": len(all_batches),
             }
 
-        # ── Modalità output (V2_OUTPUT_MODE, solo Azure) ─────────────────────
-        # narrative  → prosa narrativa standard (PROD attuale)
-        # schematic  → prosa schematica telegrafica (PENDING VALIDATION,
-        #              feature in features/pending-validation/schematic-output-mode/)
-        _output_mode_value = os.environ.get("V2_OUTPUT_MODE", "").strip().lower()
+        # ── Modalità output (per-request + env fallback + default schematic) ──
+        # schematic  → prosa schematica telegrafica (DEFAULT)
+        # narrative  → prosa narrativa discorsiva (modalità storica PROD)
+        # Precedenza: arg per-request (output_mode) > env var V2_OUTPUT_MODE > default "schematic"
+        _arg_mode = (output_mode or "").strip().lower() if output_mode else ""
+        _env_mode = os.environ.get("V2_OUTPUT_MODE", "").strip().lower()
+        _effective_mode = _arg_mode or _env_mode or "schematic"
+        if _effective_mode not in ("schematic", "narrative"):
+            _effective_mode = "schematic"
+
         output_mode_schematic = (
-            _output_mode_value == "schematic"
+            _effective_mode == "schematic"
             and primary_profile.api_kind == "azure_openai"
         )
         # output_mode_narrative resta True anche per schematic, perche' il flow
         # downstream e' identico (JSON narrativo): cambia solo il prompt e
         # l'analyze function. Mantiene compat con tutti i check esistenti.
         output_mode_narrative = (
-            (_output_mode_value == "narrative" and primary_profile.api_kind == "azure_openai")
+            (_effective_mode == "narrative" and primary_profile.api_kind == "azure_openai")
             or output_mode_schematic
         )
         _output_mode_label = (
@@ -889,7 +895,8 @@ def process_zip_v2(
         )
         if output_mode_narrative:
             print(
-                f"[V2 PIPELINE] OUTPUT_MODE={_output_mode_label} attivato su {provider_key}. "
+                f"[V2 PIPELINE] OUTPUT_MODE={_output_mode_label} attivato su {provider_key} "
+                f"(arg={_arg_mode!r}, env={_env_mode!r}). "
                 "Path YAML/incremental-builder BYPASSATO."
             )
 
@@ -912,25 +919,15 @@ def process_zip_v2(
         analyze_batch_narrative_gemini = None
         if output_mode_narrative:
             if output_mode_schematic:
-                # SCHEMATIC: feature pending validation. Carica client dalla
-                # cartella features/pending-validation/ (NON in webapp/v2/).
-                import sys as _sys
-                _schematic_dir = (
-                    Path(__file__).resolve().parent.parent.parent
-                    / "features" / "pending-validation" / "schematic-output-mode"
-                )
-                if str(_schematic_dir) not in _sys.path:
-                    _sys.path.insert(0, str(_schematic_dir))
-                from schematic_client_v2 import (  # type: ignore
+                # SCHEMATIC: client ora in webapp/v2/ (promosso a PROD default)
+                from v2.schematic_client_v2 import (
                     analyze_batch_schematic as analyze_batch_narrative,
                     analyze_batch_schematic_gemini as analyze_batch_narrative_gemini,
                     _load_schematic_prompt as _load_prompt_fn,
                 )
-                print(
-                    f"[V2 PIPELINE] Schematic client caricato da {_schematic_dir.name}"
-                )
+                print("[V2 PIPELINE] Schematic client caricato da webapp/v2/")
             else:
-                # NARRATIVE: client PROD attuale
+                # NARRATIVE: client modalità discorsiva storica
                 from v2.narrative_client_v2 import (
                     analyze_batch_narrative,
                     analyze_batch_narrative_gemini,

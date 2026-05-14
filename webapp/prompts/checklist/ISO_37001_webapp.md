@@ -32,6 +32,20 @@ Produci un **output JSON strutturato** che copra tutti i punti e sottopunti 4–
 - Divieto virgolette: MAI usare virgolette (" " o ' ') per nessun motivo nel testo delle clausole. Non virgolettare nomi di documenti, procedure, policy, codici, protocolli, registri, verbali, attestati, certificati, manuali o qualsiasi altro riferimento documentale. Integra tutti i riferimenti come testo normale nella prosa.
 - Divieto citazioni: NON usare mai citazioni numeriche tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
 
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- La visura camerale (documento 8) e il mansionario aziendale (documento 34) delineano la struttura societaria.
+- L'organigramma aziendale (documento 80), revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile Prevenzione Corruzione in data 02/03/2026 (documento 102) formalizza la responsabilita'.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- La visura camerale e il mansionario aziendale delineano la struttura societaria.
+- L'organigramma aziendale, revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile Prevenzione Corruzione in data 02/03/2026 formalizza la responsabilita'.
+
+Regola operativa: il nome del documento (visura camerale, organigramma aziendale, nomina, codice etico, procedura, ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
+
 ## Tassonomia ISO 37001 da rispettare (titoli in elenco puntato):
 
 • 4. Contesto dell'organizzazione • 4.1 Comprendere l'organizzazione e il suo contesto • 4.2 Comprendere le esigenze e le aspettative degli stakeholder • 4.3 Determinare il campo di applicazione del Sistema di Gestione per la prevenzione della corruzione • 4.4 Sistema di Gestione per la Prevenzione della Corruzione • 4.5 Valutazione del Rischio di Corruzione • 5. Leadership • 5.1 Leadership e impegno • 5.2 Politica per la prevenzione della corruzione • 5.3 Ruoli organizzativi, responsabilità e autorità • 6. Pianificazione • 6.1 Azioni per affrontare rischi e opportunità • 6.2 Obiettivi per la prevenzione della corruzione e pianificazione • 7. Supporto • 7.1 Risorse • 7.2 Competenza • 7.3 Consapevolezza e formazione • 7.4 Comunicazione • 7.5 Informazioni documentate • 8. Attività operative • 8.1 Pianificazione e controllo operativi • 8.2 Due Diligence • 8.3 Controlli finanziari • 8.4 Controlli non finanziari • 8.5 Attuazione dei controlli da parte dei soci in affari • 8.6 Impegni per la prevenzione della corruzione • 8.7 Regali, ospitalità, donazioni e benefici simili • 8.8 Gestione dell'inadeguatezza dei controlli • 8.9 Segnalazione di sospetti • 8.10 Indagini e gestione della corruzione • 9. Valutazione delle prestazioni • 9.1 Monitoraggio, misurazione, analisi e valutazione • 9.2 Audit interno • 9.3 Riesame di direzione • 9.4 Riesame della funzione di conformità per la prevenzione della corruzione • 10. Miglioramento • 10.1 Non conformità e azione correttiva • 10.2 Miglioramento continuo

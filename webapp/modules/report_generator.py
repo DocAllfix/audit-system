@@ -504,10 +504,16 @@ def generate_report_word(paragraphs: List[Dict], stats: Dict, company_name: str 
             doc.add_heading(category, 1)
             current_category = category
 
-        # Sottotitolo numerato
+        # Sottotitolo (senza marker [N]: la numerazione resta nel JSON, non nel docx
+        # per evitare che Tab 2 citi i documenti come "(documento N)" anziche' per nome)
         numero = _xml_safe(para.get("numero", ""))
         sottotitolo = _xml_safe(para.get("sottotitolo", ""))
-        heading_text = f"[{numero}] {sottotitolo}" if numero else sottotitolo
+        if sottotitolo:
+            heading_text = sottotitolo
+        elif numero:
+            heading_text = f"Paragrafo {numero}"
+        else:
+            heading_text = "Paragrafo"
         doc.add_heading(heading_text, 2)
 
         # Contenuto

@@ -605,6 +605,7 @@ async def v2_process_report(
     file: UploadFile = File(...),
     dry_run: bool = False,
     legacy_events: bool = False,
+    output_mode: str = Form("schematic"),
     user: Dict = Depends(_get_current_user),
 ):
     """
@@ -615,7 +616,13 @@ async def v2_process_report(
         legacy_events=true → eventi tradotti in formato V1 `{pct, msg}`
                               per compatibilità con frontend V1 esistente
 
-    Body: multipart/form-data con `file` ZIP.
+    Form fields:
+        file: ZIP binario (richiesto)
+        output_mode: "schematic" (default) | "narrative".
+                     Sceglie il client di analisi LLM:
+                     - schematic = prosa key:value telegrafica (default PROD)
+                     - narrative = prosa discorsiva (modalità storica)
+                     Valori non validi → fallback silenzioso a "schematic".
 
     Auth: come V1.
 
@@ -623,6 +630,9 @@ async def v2_process_report(
     file.*, llm.token, error, heartbeat, done.
     Con legacy_events=true: i suddetti vengono tradotti in formato V1.
     """
+    # Validazione output_mode (fallback silenzioso al default)
+    if output_mode not in ("schematic", "narrative"):
+        output_mode = "schematic"
     from v2.legacy_adapter import LegacyAdapter
     from v2.pipeline import process_zip_v2
     from v2.progress_store import ProgressStore
@@ -644,7 +654,8 @@ async def v2_process_report(
     session_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + username[:20].replace(" ", "_")
     logger.info(
         f"[V2 Tab1] {username} → {original_filename} "
-        f"({len(file_bytes)/1024/1024:.1f} MB) session={session_id} dry_run={dry_run}"
+        f"({len(file_bytes)/1024/1024:.1f} MB) session={session_id} "
+        f"dry_run={dry_run} output_mode={output_mode}"
     )
 
     loop = asyncio.get_event_loop()
@@ -686,6 +697,7 @@ async def v2_process_report(
                     emitter=emitter,
                     dry_run=dry_run,
                     zip_filename=file.filename or "",
+                    output_mode=output_mode,
                 )
             except BaseException as e:
                 # Cattura ANCHE BaseException (MemoryError, SystemExit, ecc.)

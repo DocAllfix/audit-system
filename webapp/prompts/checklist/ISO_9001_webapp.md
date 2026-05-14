@@ -27,6 +27,21 @@ Produci un **output JSON strutturato** che copra tutti i punti e sottopunti dell
 - Non inserire intestazioni tipo "Evidenze raccolte" in alcuna clausola/sotto clausola: avvia direttamente i paragrafi in prosa.
 - Informazioni non rinvenute: non scrivere "manca"; dichiara che l'informazione è presente, quindi visionata in corso di audit e conforme allo standard.
 - Osservazioni: inseriscile solo quando necessarie e solo con hedging; non proporre obiettivi nelle osservazioni.
+- Divieto citazioni: NON usare mai citazioni numeriche tipo [1], [N], (documento X), [allegato N], riferimenti a numeri di documento o a tipi di file (JPEG, PDF, immagine). Scrivi evidenze in prosa pura senza riferimenti a sorgenti.
+
+### Esempi vietati vs corretti (citazioni documentali)
+
+VIETATO (cita documenti per numero progressivo):
+- La visura camerale (documento 8) e il mansionario aziendale (documento 34) delineano la struttura societaria.
+- L'organigramma aziendale (documento 80), revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile Qualita' in data 02/03/2026 (documento 102) formalizza la responsabilita'.
+
+CORRETTO (cita per nome documento, senza parentesi numerate):
+- La visura camerale e il mansionario aziendale delineano la struttura societaria.
+- L'organigramma aziendale, revisionato al 09/04/2026, mostra la gerarchia decisionale.
+- La nomina del Responsabile Qualita' in data 02/03/2026 formalizza la responsabilita'.
+
+Regola operativa: il nome del documento (visura camerale, organigramma aziendale, nomina, procedura, manuale qualita', ecc.) e' gia' sufficiente per identificare l'evidenza. Aggiungere (documento N) e' ridondante e vietato.
 
 ## Tassonomia ISO 9001 da rispettare (titoli in elenco puntato e in grassetto):
 
