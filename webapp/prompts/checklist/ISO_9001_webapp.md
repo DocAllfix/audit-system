@@ -143,4 +143,4 @@ Prima di generare il JSON finale, verifica che:
 
 - L'output deve essere SOLO il JSON, senza preamboli o commenti.
 - Usa le chiavi ESATTAMENTE come specificate (es. "iso9001_4_1", non "iso9001_4.1").
-- OGNI clausola deve contenere 150-350 parole di prosa densa.
+- OGNI clausola DEVE contenere MINIMO 150 parole (target 150-350) di prosa densa. Una clausola sotto 150 parole è INSUFFICIENTE: espandila con maggiore dettaglio (evidenze, ID, date, riferimenti) prima di emettere il JSON.

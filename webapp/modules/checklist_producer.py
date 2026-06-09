@@ -207,6 +207,34 @@ WARNING_CLAUSE_WORDS_PER_NORM = {
     "ISO/IEC 27001:2022": 175,
 }
 
+# Target "pieno" per-norma = lower bound del range richiesto nel prompt.
+# Usato SOLO dalla rete di sicurezza di rigenerazione (Fix A) come OBIETTIVO.
+# NON sostituisce MIN_CLAUSE_WORDS_PER_NORM (=100), che resta la soglia "errore
+# critico" usata dal path /recover (get_incomplete_clauses, recover_incomplete_clauses).
+REGEN_TARGET_WORDS_PER_NORM = {
+    "ISO 9001": 150,
+    "ISO 14001": 150,
+    "ISO 45001": 150,        # default norma; 10 clausole hanno 300-500 (gestito dal prompt)
+    "ISO 14064": 150,
+    "ESG": 150,
+    "PAS 24000": 150,
+    "ISO 27001": 250,
+    "ISO 37001": 250,
+    "ISO 39001": 250,
+    "ISO 50001": 250,
+    "ISO 50001 ESQ": 250,
+    "ISO 50001 CERTIS": 250,
+    "ISO/IEC 27001": 250,
+    "ISO/IEC 27001:2022": 250,
+}
+
+# Ratio di tolleranza: la rigenerazione scatta solo SOTTO il 95% del target.
+# Compromesso scelto: rigenera le clausole apprezzabilmente corte (es. <143 per
+# norme a 150, <238 per norme a 250), lasciando gialle solo quelle a un passo dal
+# minimo (143-149 / 238-249). Il footer dei prompt (Fix B) da solo non basta a
+# garantire il minimo → la soglia trigger è la leva efficace. Tunable.
+REGEN_TRIGGER_RATIO = 0.95
+
 
 def clean_company_name(name: str) -> str:
     """
@@ -422,6 +450,23 @@ def get_warning_clause_words(norma: str) -> int:
         Soglia warning parole (fallback a 150 se norma non trovata)
     """
     return WARNING_CLAUSE_WORDS_PER_NORM.get(norma, 150)
+
+
+def get_regen_target_words(norma: str) -> int:
+    """
+    Target "pieno" di parole per clausola per la norma (lower bound del prompt).
+    Obiettivo a cui punta la rigenerazione. Fallback 150.
+    """
+    return REGEN_TARGET_WORDS_PER_NORM.get(norma, 150)
+
+
+def get_regen_trigger_words(norma: str) -> int:
+    """
+    Soglia di trigger della rigenerazione: l'85% del target (tolleranza).
+    Sotto questa soglia = clausola palesemente corta → rigenera.
+    Es. norma a 150 → 128; norma a 250 → 213.
+    """
+    return round(get_regen_target_words(norma) * REGEN_TRIGGER_RATIO)
 
 
 # Numero di gruppi paralleli per elaborazione clausole
@@ -767,16 +812,20 @@ def regenerate_short_clauses(
     
     client = create_genai_client(api_key)
     
-    # Rigenera ogni clausola corta
+    # Rigenera le clausole corte IN PARALLELO (rete di sicurezza, non massimalista).
+    # Punta al target pieno della norma; accetta la nuova versione SOLO se migliora
+    # la clausola (mai regressione → se il modello produce qualcosa di uguale/peggiore
+    # si tiene l'originale).
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    target_words = get_regen_target_words(norma)
     total = len(short_clauses)
-    for i, (clause_key, current_words) in enumerate(short_clauses):
-        if progress_callback:
-            progress_callback(
-                85 + int((i / total) * 10),
-                f"Rielaborazione clausola {clause_key} ({current_words} parole)..."
-            )
-        
-        # Prompt specifico per rigenerare UNA clausola
+    lock = threading.Lock()
+    done = [0]
+
+    def _regen_one(item):
+        clause_key, current_words = item
         regen_prompt = f"""
 Sei un auditor ISO. Devi espandere la seguente clausola con più dettagli.
 
@@ -788,32 +837,40 @@ DOCUMENTI DI RIFERIMENTO:
 {report_text}
 
 ISTRUZIONI:
-- Riscrivi SOLO questa clausola con minimo 150 parole
+- Riscrivi SOLO questa clausola con MINIMO {target_words} parole di prosa densa
 - Includi evidenze oggettive, numeri, date, riferimenti documentali
 - Stile: prosa discorsiva formale, no elenchi puntati
 - Output: SOLO il testo della clausola, niente JSON
 
 CLAUSOLA ESPANSA:
 """
-        
         try:
             new_text = checklist_llm_generate(
                 prompt=regen_prompt,
                 temperature=0.2,
-                max_output_tokens=2000,
+                max_output_tokens=3000,
                 gemini_client=client,
                 api_key=api_key,
             )
-
-            # Usa soglia dinamica per la norma specifica
-            min_words_for_norm = get_min_clause_words(norma)
-            if len(new_text.split()) >= min_words_for_norm:
-                json_data["clausole"][clause_key] = new_text
-                
-        except Exception as e:
+            # Acceptance "mai regressione": sostituisci solo se più lungo dell'originale
+            if len(new_text.split()) > current_words:
+                with lock:
+                    json_data["clausole"][clause_key] = new_text
+        except Exception:
             # Se fallisce, mantieni la versione originale
             pass
-    
+        finally:
+            with lock:
+                done[0] += 1
+                if progress_callback:
+                    progress_callback(
+                        85 + int((done[0] / total) * 10),
+                        f"Rielaborazione clausole brevi ({done[0]}/{total})..."
+                    )
+
+    with ThreadPoolExecutor(max_workers=min(8, total)) as executor:
+        list(executor.map(_regen_one, short_clauses))
+
     return json_data
 
 
@@ -1372,7 +1429,7 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
             total_clauses = len(json_data.get("clausole", {}))
             progress_callback(82, f"Validazione {total_clauses} clausole...")
         
-        short_clauses = find_short_clauses(json_data)
+        short_clauses = find_short_clauses(json_data, min_words=get_regen_trigger_words(norma))
         
         if short_clauses:
             if progress_callback:
@@ -1399,7 +1456,7 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
         }
         
         # Riepilogo finale
-        final_short = find_short_clauses(json_data)
+        final_short = find_short_clauses(json_data, min_words=get_regen_trigger_words(norma))
         total_clauses = len(json_data.get("clausole", {}))
         
         if progress_callback:
@@ -1681,7 +1738,7 @@ def produce_checklist_json_parallel(
     if progress_callback:
         progress_callback(80, f"📋 Validazione {len(all_clausole)} clausole...")
     
-    short_clauses = find_short_clauses(json_data)
+    short_clauses = find_short_clauses(json_data, min_words=get_regen_trigger_words(norma))
     
     if short_clauses:
         if progress_callback:
@@ -1729,7 +1786,7 @@ def produce_checklist_json_parallel(
         "errori_gruppi": errors if errors else None
     }
     
-    final_short = find_short_clauses(json_data)
+    final_short = find_short_clauses(json_data, min_words=get_regen_trigger_words(norma))
     
     if progress_callback:
         if final_short:
