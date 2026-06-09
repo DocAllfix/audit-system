@@ -215,6 +215,88 @@ class AzureOpenAIClientV2:
             max_tokens=max_tokens or self.profile.max_output_tokens,
         )
 
+    def chat_complete(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: float = 0.0,
+        json_schema: Optional[Dict[str, Any]] = None,
+        schema_name: str = "checklist",
+        batch_idx: int = 0,
+    ):
+        """
+        Chiamata NON-streaming (blocking) a ChatCompletions.
+
+        Usata dalla Tab 2 (checklist), che richiede l'output completo in un colpo
+        e — quando serve — JSON strutturato (response_format json_schema strict).
+        NON altera `chat_stream` (path della Tab 1, intoccato).
+
+        Args:
+            messages: lista messaggi OpenAI ([{"role": "user", "content": ...}]).
+            max_tokens: cap output (default profile.max_output_tokens).
+            temperature: 0.0 deterministico (default), come Gemini Tab 2.
+            json_schema: se fornito, forza output JSON conforme allo schema
+                         (gia' convertito in formato Azure strict dal chiamante).
+            schema_name: nome logico dello schema (richiesto da Azure).
+            batch_idx: indice per logging/eccezioni.
+
+        Returns:
+            (text, usage) — usage e' l'oggetto usage SDK o None.
+
+        Raises:
+            AzureRateLimitExhausted: se i retry per 429 sono esauriti
+                                     (catturato a monte per failover Gemini).
+        """
+        kwargs: Dict[str, Any] = {
+            "model": self.deployment,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens or self.profile.max_output_tokens,
+        }
+        if json_schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            }
+
+        last_error = ""
+        for attempt in range(MAX_STREAM_RETRIES):
+            try:
+                resp = self._sdk.chat.completions.create(**kwargs)
+                text = ""
+                if getattr(resp, "choices", None):
+                    text = resp.choices[0].message.content or ""
+                usage = getattr(resp, "usage", None)
+                return text, usage
+            except Exception as e:  # noqa: BLE001 — classificazione via attributi/stringa
+                last_error = str(e)
+                status = getattr(e, "status_code", None)
+                err_low = last_error.lower()
+                is_rate_limit = (
+                    status == 429 or "429" in last_error or "rate limit" in err_low
+                )
+                is_transient = (
+                    is_rate_limit
+                    or status in (408, 500, 502, 503, 504)
+                    or "timeout" in err_low
+                    or "connection" in err_low
+                )
+                if is_transient and attempt < MAX_STREAM_RETRIES - 1:
+                    delay = min(
+                        RETRY_BASE_DELAY_SECONDS * (2 ** attempt),
+                        RETRY_MAX_DELAY_SECONDS,
+                    )
+                    time.sleep(delay)
+                    continue
+                if is_rate_limit:
+                    raise AzureRateLimitExhausted(batch_idx, attempt + 1, last_error)
+                raise
+        raise AzureRateLimitExhausted(batch_idx, MAX_STREAM_RETRIES, last_error)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Eccezioni

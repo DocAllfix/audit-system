@@ -19,6 +19,7 @@ from config import (
     SUPPORTED_NORMS
 )
 from modules.genai_factory import create_genai_client
+from modules.llm_checklist_client import checklist_llm_generate, active_tab2_model
 
 try:
     from modules.gemini_throttle import gemini_structured_slot
@@ -368,15 +369,16 @@ ESEMPI DI OUTPUT CORRETTO:
 
 OUTPUT: Scrivi SOLO il nome completo dell'azienda, nient'altro. Se non identificabile: "UNKNOWN"."""
         
-        with gemini_structured_slot():
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=100)
-            )
+        response_text = checklist_llm_generate(
+            prompt=prompt,
+            temperature=0.0,
+            max_output_tokens=100,
+            gemini_client=client,
+            api_key=api_key,
+        )
 
-        result = response.text.strip().replace('"', '').replace('\n', '').replace('*', '')
-        
+        result = response_text.replace('"', '').replace('\n', '').replace('*', '')
+
         # Rimuovi eventuali prefissi tipo "Nome:" o "Azienda:"
         import re
         result = re.sub(r'^(?:Nome|Azienda|Organizzazione|Output|Risposta)\s*:\s*', '', result, flags=re.IGNORECASE).strip()
@@ -534,20 +536,17 @@ def process_clause_group(
             # Schema per questo gruppo specifico
             group_schema = build_group_schema(clauses)
 
-            with gemini_structured_slot():
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL_CHECKLIST,
-                    contents=group_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        max_output_tokens=32000,
-                        response_mime_type="application/json",
-                        response_schema=group_schema
-                    )
-                )
-            
             import json
-            response_text = response.text.strip()
+            response_text = checklist_llm_generate(
+                prompt=group_prompt,
+                temperature=0.0,
+                max_output_tokens=32000,
+                json_schema=group_schema,
+                gemini_client=client,
+                api_key=api_key,
+                schema_name="checklist_group",
+                batch_idx=group_idx,
+            )
             
             # Rimuovi markdown se presente
             if response_text.startswith("```"):
@@ -798,17 +797,14 @@ CLAUSOLA ESPANSA:
 """
         
         try:
-            with gemini_structured_slot():
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL_CHECKLIST,
-                    contents=regen_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.2,
-                        max_output_tokens=2000
-                    )
-                )
-            
-            new_text = response.text.strip()
+            new_text = checklist_llm_generate(
+                prompt=regen_prompt,
+                temperature=0.2,
+                max_output_tokens=2000,
+                gemini_client=client,
+                api_key=api_key,
+            )
+
             # Usa soglia dinamica per la norma specifica
             min_words_for_norm = get_min_clause_words(norma)
             if len(new_text.split()) >= min_words_for_norm:
@@ -904,25 +900,14 @@ TESTO CLAUSOLA:
         max_retries = 5  # Aumentato da 3 per maggiore resilienza
         for attempt in range(max_retries):
             try:
-                with gemini_structured_slot():
-                    response = client.models.generate_content(
-                        model=GEMINI_MODEL_CHECKLIST,
-                        contents=recovery_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.3,
-                            max_output_tokens=4000  # Aumentato da 2500 per clausole complete
-                        )
-                    )
-                
-                # NUOVO: Verifica finish_reason per rilevare troncature
-                finish_reason = getattr(response.candidates[0], 'finish_reason', None) if response.candidates else None
-                if finish_reason and str(finish_reason) == "MAX_TOKENS":
-                    print(f"[WARNING] Troncatura rilevata su {clause_key}, tentativo recupero...")
-                    # Riprova con prompt più corto
-                    continue
-                
-                new_text = response.text.strip()
-                
+                new_text = checklist_llm_generate(
+                    prompt=recovery_prompt,
+                    temperature=0.3,
+                    max_output_tokens=4000,  # clausole complete
+                    gemini_client=client,
+                    api_key=api_key,
+                )
+
                 # Pulisci eventuali wrapper markdown
                 if new_text.startswith("```"):
                     lines = new_text.split("\n")
@@ -1040,23 +1025,19 @@ TESTO CLAUSOLA:
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                with gemini_structured_slot():
-                    response = client.models.generate_content(
-                        model=GEMINI_MODEL_CHECKLIST,
-                        contents=recovery_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=4000
-                        )
+                new_text = checklist_llm_generate(
+                    prompt=recovery_prompt,
+                    temperature=0.0,
+                    max_output_tokens=4000,
+                    gemini_client=client,
+                    api_key=api_key,
                 )
-                
-                new_text = response.text.strip()
-                
+
                 # Pulisci eventuali wrapper markdown
                 if new_text.startswith("```"):
                     lines = new_text.split("\n")
                     new_text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-                
+
                 if len(new_text.split()) >= 120:  # Soglia minima recovery: 120 parole
                     json_data["clausole"][clause_key] = new_text
                     recovered.append(clause_key)
@@ -1328,17 +1309,15 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
                 # Costruisci schema per la norma specifica
                 response_schema = build_response_schema(norma)
 
-                with gemini_structured_slot():
-                    api_response[0] = client.models.generate_content(
-                        model=GEMINI_MODEL_CHECKLIST,
-                        contents=full_message,
-                        config=types.GenerateContentConfig(
-                            temperature=0.1,
-                            max_output_tokens=65536,
-                            response_mime_type="application/json",
-                            response_schema=response_schema  # Schema stretto per JSON valido
-                        )
-                    )
+                api_response[0] = checklist_llm_generate(
+                    prompt=full_message,
+                    temperature=0.1,
+                    max_output_tokens=65536,
+                    json_schema=response_schema,
+                    gemini_client=client,
+                    api_key=api_key,
+                    schema_name="checklist_full",
+                )
             except Exception as e:
                 api_error[0] = e
             finally:
@@ -1370,13 +1349,11 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
         if api_error[0]:
             raise api_error[0]
         
-        response = api_response[0]
-        
         if progress_callback:
             progress_callback(80, "Parsing risposta JSON...")
-        
+
         # Step 5: Parsa la risposta JSON
-        response_text = response.text.strip()
+        response_text = (api_response[0] or "").strip()
         
         # Rimuovi eventuali markdown code blocks
         if response_text.startswith("```"):
@@ -1415,7 +1392,7 @@ Analizza attentamente tutto il contenuto e produci il JSON richiesto.
         json_data["_metadata"] = {
             "norma": norma,
             "generato_il": datetime.now().isoformat(),
-            "modello": GEMINI_MODEL_CHECKLIST,
+            "modello": active_tab2_model(),
             "parole_input": word_count,
             "caratteri_input": char_count,
             "clausole_rigenerate": len(short_clauses) if short_clauses else 0
@@ -1546,17 +1523,15 @@ ESEMPI CORRETTI:
 
 OUTPUT: Scrivi SOLO il nome completo dell'azienda, nient'altro. Se non identificabile: "UNKNOWN"."""
         
-        with gemini_structured_slot():
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=100  # Aumentato per nomi lunghi
-                )
-            )
+        response_text = checklist_llm_generate(
+            prompt=prompt,
+            temperature=0.0,
+            max_output_tokens=100,  # nomi lunghi
+            gemini_client=client,
+            api_key=api_key,
+        )
 
-        result = response.text.strip().replace('"', '').replace('\n', '').replace('*', '')
+        result = response_text.replace('"', '').replace('\n', '').replace('*', '')
 
         # Rimuovi eventuali prefissi tipo "Nome:" o "Azienda:"
         result = re.sub(r'^(?:Nome|Azienda|Organizzazione|Output|Risposta)\s*:\s*', '', result, flags=re.IGNORECASE).strip()
@@ -1743,7 +1718,7 @@ def produce_checklist_json_parallel(
     json_data["_metadata"] = {
         "norma": norma,
         "generato_il": datetime.now().isoformat(),
-        "modello": GEMINI_MODEL_CHECKLIST,
+        "modello": active_tab2_model(),
         "parole_input": word_count,
         "caratteri_input": char_count,
         "modalita": "parallela",

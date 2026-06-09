@@ -129,3 +129,28 @@ V2_CACHE_TTL_SECONDS = int(os.environ.get("V2_CACHE_TTL_SECONDS", "3600"))
 # Cap di sicurezza globale sulla risposta API (Fase 5). Previene crash lxml.
 V2_MAX_RESPONSE_CHARS = int(os.environ.get("V2_MAX_RESPONSE_CHARS", "400000"))
 
+# ==============================================================================
+# TAB 2 (Checklist) — selezione provider LLM
+# ==============================================================================
+# La Tab 2 (produzione checklist JSON) puo' usare Gemini (default, storico) o
+# Azure OpenAI GPT-4.1-mini. Lo switch e' centralizzato in
+# modules/llm_checklist_client.py e attivato da questa env var.
+#   "gemini" (default) -> comportamento invariato
+#   "azure"            -> Azure GPT-4.1-mini (16M TPM, connessione diretta)
+# Su errore Azure, fallback automatico a Gemini sul singolo call
+# (disattivabile con TAB2_DISABLE_FALLBACK=1).
+TAB2_PROVIDER = os.environ.get("TAB2_PROVIDER", "gemini").strip().lower()
+
+# Whitelist utenti per rollout progressivo Azure sulla Tab 2 (opzionale).
+# Vuoto = nessun filtro (il provider TAB2_PROVIDER vale per tutti).
+TAB2_AZURE_WHITELIST = [
+    u.strip()
+    for u in os.environ.get("TAB2_AZURE_WHITELIST", "").split(",")
+    if u.strip()
+]
+
+# Env Azure richieste quando TAB2_PROVIDER=azure (gia' usate dalla pipeline V2):
+#   AZURE_OPENAI_API_KEY                 chiave API Azure
+#   AZURE_OPENAI_ENDPOINT                https://<resource>.services.ai.azure.com/openai/v1
+#   AZURE_OPENAI_DEPLOYMENT_GPT_41_MINI  nome deployment per gpt-4.1-mini
+
